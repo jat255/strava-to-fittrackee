@@ -1,4 +1,4 @@
-# Strava-to-FitTrackee
+# Strava-to-FitTrackee (Still Work in Progress...)
 
 This is a little tool that will pull workouts from a [Strava](https://www.strava.com/)
 account and push them to a [FitTrackee](https://github.com/SamR1/FitTrackee/) instance.
