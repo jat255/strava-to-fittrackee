@@ -6,11 +6,22 @@ import gpxpy
 import json
 import os
 from pathlib import Path
+import tempfile
+import atexit
 from pprint import pprint
 import logging
+import urllib3
 
 logger = logging.getLogger(__name__)
 logging.basicConfig()
+logger.setLevel(logging.DEBUG)
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+# create directory for storing files temporarily and delete it
+# when the program finishes (using atexit module)
+tempdir = tempfile.TemporaryDirectory()
+logger.debug(f"tempdir is {tempdir}")
+atexit.register(lambda: logger.debug(f"Removing {tempdir}") and tempdir.cleanup())
 
 def get_or_raise_env(value: str, 
                      allow_none: bool = False) -> Union[str, None]:
@@ -60,9 +71,6 @@ def save_conf(env_var, tokens):
   token_file = get_or_raise_env(env_var)
   with open(Path(token_file), 'w') as f:
     json.dump(tokens, f, indent=2)
-
-def is_token_expired(tokens):
-  return datetime.now().timestamp() > tokens['expires_at']
 
 class StravaConnector:
 
@@ -151,32 +159,38 @@ class StravaConnector:
       activities = r.json()
       return activities
 
-  def create_activity_from_strava(self, activity: dict):
+  def create_activity_from_strava(self, activity: dict, get_streams: bool = True):
     activity_id = activity['id']
     
-    logger.debug(f'Getting latitude and longitude for activity {activity_id}')
-    r = self.client.get(self.base_url + f"/activities/{activity_id}/streams",
-                        params={'keys': ['latlng']})
-    r.raise_for_status()
-    latlng = r.json()[0]['data']
-    
-    logger.debug(f'Getting timepoints for activity {activity_id}')
-    r = self.client.get(self.base_url + f"/activities/{activity_id}/streams",
-                        params={'keys': ['time']})
-    r.raise_for_status()
-    time_list = r.json()[1]['data']
-    
-    logger.debug(f'Getting altitude for activity {activity_id}')
-    r = self.client.get(self.base_url + f"/activities/{activity_id}/streams",
-                        params={'keys': ['altitude']})
-    r.raise_for_status()
-    altitude = r.json()[1]['data']
+    if get_streams:
+      logger.debug(f'Getting latitude and longitude for activity {activity_id}')
+      r = self.client.get(self.base_url + f"/activities/{activity_id}/streams",
+                          params={'keys': ['latlng']})
+      r.raise_for_status()
+      latlng = r.json()[0]['data']
+      
+      logger.debug(f'Getting timepoints for activity {activity_id}')
+      r = self.client.get(self.base_url + f"/activities/{activity_id}/streams",
+                          params={'keys': ['time']})
+      r.raise_for_status()
+      time_list = r.json()[1]['data']
+      
+      logger.debug(f'Getting altitude for activity {activity_id}')
+      r = self.client.get(self.base_url + f"/activities/{activity_id}/streams",
+                          params={'keys': ['altitude']})
+      r.raise_for_status()
+      altitude = r.json()[1]['data']
 
-    logger.debug(f'Getting velocity for activity {activity_id}')
-    r = self.client.get(self.base_url + f"/activities/{activity_id}/streams",
-                        params={'keys': ['velocity_smooth']})
-    r.raise_for_status()
-    velocity = r.json()[0]['data']
+      logger.debug(f'Getting velocity for activity {activity_id}')
+      r = self.client.get(self.base_url + f"/activities/{activity_id}/streams",
+                          params={'keys': ['velocity_smooth']})
+      r.raise_for_status()
+      velocity = r.json()[0]['data']
+    else:
+      latlng = [(None, None)]
+      time_list = [0]
+      altitude = [None]
+      velocity = [None]
 
     return Activity(activity_dict=activity, 
                     latlng=latlng, 
@@ -202,7 +216,9 @@ class Activity:
     gpx = gpxpy.gpx.GPX()
     
     # Create first track in our GPX:
-    gpx_track = gpxpy.gpx.GPXTrack(name=self.title)
+    gpx_track = gpxpy.gpx.GPXTrack(
+      name=self.title,
+      description=self.activity_dict['type'])
     gpx.tracks.append(gpx_track)
     
     # Create first segment in our GPX track:
@@ -222,13 +238,101 @@ class Activity:
     return self.as_gpx().to_xml()
 
 
-if __name__ == '__main__':
-  logger.setLevel(logging.DEBUG)
-  strava = StravaConnector()
-  activities = strava.get_activities()
-  pprint(activities[0])
-  act = strava.create_activity_from_strava(activities[0])
-  with open('test.gpx', 'w') as f:
-    f.write(act.as_xml())
+class FitTrackeeConnector:
 
+  def __init__(self):
+    logger.debug("Initializing FitTrackeeConnector")
+    self.tokens = load_conf('FITTRACKEE_TOKEN_FILE')
+    self.host = get_or_raise_env('FITTRACKEE_HOST')
+    self.client_id = get_or_raise_env('FITTRACKEE_CLIENT_ID')
+    self.client_secret = get_or_raise_env('FITTRACKEE_CLIENT_SECRET')
+    self.authorize_url = f'https://{self.host}/profile/apps/authorize'
+    self.base_url = f'https://{self.host}/api'
+    self.token_url = self.base_url + '/oauth/token'
+    self.client = self.auth()
+
+  def auth(self):
+    """
+    Checks if a valid access token exists in the token file;
+    if not, tries to get a new one via a refresh token (if present)
+    or prompts the user to authenticate in order to get a brand new
+    token. 
+    """
+    logger.debug("Setting up FitTrackee auth")
+    if self.tokens is None:
+      logger.debug("No FitTrackee tokens found; fetching new ones")
+      return self.web_application_flow()
+    else:
+      logger.debug("Using existing FitTrackee tokens with self-refreshing client")
+      return self.get_refreshing_client()
+
+  def web_application_flow(self):
+    logger.debug("Running FitTrackee Web Application Flow")
+    redirect_uri = f'https://self.host/callback'
+    scope = 'workouts:read workouts:write'
+    oauth = OAuth2Session(self.client_id, 
+                          redirect_uri=redirect_uri,          
+                          scope=scope)
+    authorization_url, state = oauth.authorization_url(self.authorize_url)
+    print(f'Please go to {authorization_url} and authorize access.')
+    
+    authorization_response = input('\nEnter the full callback URL from the browser address bar after you are redirected and press <enter>:\n\n')
+    self.tokens = oauth.fetch_token(self.token_url,
+      authorization_response=authorization_response,
+      client_secret=self.client_secret, include_client_id=True, verify=False)
+  
+    save_conf('FITTRACKEE_TOKEN_FILE', self.tokens)
+    return oauth
+
+  def get_refreshing_client(self):
+    refresh_params = {
+        'client_id': self.client_id,
+        'client_secret': self.client_secret,
+    }
+    client = OAuth2Session(self.client_id, 
+      token=self.tokens, 
+      auto_refresh_url=self.token_url,
+      auto_refresh_kwargs=refresh_params, 
+      token_updater=lambda x: save_conf('FITTRACKEE_TOKEN_FILE', x))
+    return client
+
+  def get_workouts(self, limit: Union[int, None] = 30, start_date: str = None):
+    if limit is None:
+      logger.debug(
+        f'Getting all workouts from FitTrackee (in pages of 30) {f"after {start_date}" if start_date else ""}')
+    else:
+      logger.debug(f"Getting last {limit} activities (in pages of 30) {f'after {start_date}' if start_date else ''}")
+    results = {'pagination': {'has_next': True}}
+    page = 1
+    workouts = []
+
+    while results['pagination']['has_next'] and (len(workouts) < limit if limit else True):
+      r = self.client.get(
+        self.base_url + '/workouts', 
+        params={'per_page': 30, 'page': page, 'from': start_date},
+        verify=False)
+      r.raise_for_status()
+      results = r.json()
+      workouts.extend(results['data']['workouts'])
+      logger.debug(f'Fetched page {page} of workouts '
+                   f"(fetched {len(workouts)} so far)")
+      page += 1
+    
+    if limit:
+      workouts = workouts[:limit]
+    
+    return workouts
+
+if __name__ == '__main__':
+  # strava = StravaConnector()
+  # activities = strava.get_activities()
+  # for a in activities:
+  #   act = strava.create_activity_from_strava(a, get_streams=False)
+  #   print(act.start_time, act.activity_dict['id'])
+    # logger.debug(f"Writing activity gpx to {tempdir.name}/{act.activity_dict['id']}.gpx")
+    # with open(tempdir.name + f'/{act.activity_dict["id"]}.gpx', 'w') as f:
+      # f.write(act.as_xml())
+  fittrackee = FitTrackeeConnector()
+  workouts = fittrackee.get_workouts(limit=None, start_date=None)
+  # pprint(fittrackee.client.get(fittrackee.base_url + '/workouts', verify=False).json())
   pass
