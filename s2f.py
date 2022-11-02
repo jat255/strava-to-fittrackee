@@ -1,5 +1,5 @@
 from requests_oauthlib import OAuth2Session
-from typing import Union
+from typing import Union, Optional
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
 import gpxpy
@@ -129,18 +129,21 @@ class StravaConnector:
       logger.debug("Using existing Strava tokens with self-refreshing client")
       return self.get_refreshing_client()
 
-  def get_activities(self, limit: Union[int, None] = 30):
+  def get_activities(self, limit: Union[int, None] = 30, after: Optional[datetime] = None):
     """
     If ``limit`` is ``None``, get all activities available (useful for initial 
     run, perhaps), otherwise get a limited number (default: 30) 
     """
     if limit is None:
-      logger.debug('Getting all Strava activities since "limit" was "None"')
+      logger.debug(f'Getting all Strava activities {f"after {after}" if after else ""}')
       page = 1
       all_activities = []
       while True:
+        params = {'per_page': 30, 'page': page}
+        if after:
+          params['after'] = after.timestamp()
         r = self.client.get(self.base_url + '/athlete/activities',
-                             params={'per_page': 30, 'page': page})
+                             params=params)
         r.raise_for_status()
         if len(r.json()) == 0:
           logger.debug(f"No more activities found "
@@ -152,9 +155,12 @@ class StravaConnector:
                        f"(fetched {len(all_activities)} so far)")
           page += 1
     else:
-      logger.debug(f'Getting last {limit} activities')
+      logger.debug(f'Getting last {limit} activities {f"after {after}" if after else ""}')
+      params={'per_page': limit}
+      if after:
+          params['after'] = after.timestamp()
       r = self.client.get(self.base_url + '/athlete/activities',
-                          params={'per_page': limit})
+                          params=params)
       r.raise_for_status()
       activities = r.json()
       return activities
@@ -333,6 +339,15 @@ if __name__ == '__main__':
     # with open(tempdir.name + f'/{act.activity_dict["id"]}.gpx', 'w') as f:
       # f.write(act.as_xml())
   fittrackee = FitTrackeeConnector()
-  workouts = fittrackee.get_workouts(limit=None, start_date=None)
+  workouts = fittrackee.get_workouts(limit=1, start_date='2022-10-01')
+  for w in workouts:
+    latest = datetime.strptime(w['workout_date'], '%a, %d %b %Y %H:%M:%S GMT')
+    print(latest)
   # pprint(fittrackee.client.get(fittrackee.base_url + '/workouts', verify=False).json())
+  
+  strava = StravaConnector()
+  new_activities = strava.get_activities(limit=None, after=latest + timedelta(minutes=5))
+  for a in new_activities:
+    act = strava.create_activity_from_strava(a, get_streams=False)
+    print(act.start_time, act.activity_dict['id'])
   pass
