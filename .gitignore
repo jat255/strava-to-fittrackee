@@ -1,3 +1,8 @@
+*.bak
 .env
 .vscode
-.*tokens.json
+*.json
+gpx
+*.gpx
+__pycache__
+add_links.py
