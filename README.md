@@ -39,6 +39,18 @@ documented in order to set the appropriate API client IDs and secrets, as well a
 the FitTrackee host (currently, https verification is not enabled because FitTrackee
 is often hosted with a self-signed certificate).
 
+If you have not got python 3.9 installed install it now, on Ubuntu just issue a command:
+
+```sh
+$ sudo apt install python3.9
+```
+
+Set the poetry Python version:
+
+```sh
+$ poetry env use 3.9
+```
+
 Install the script's dependencies by running:
 
 ```sh
@@ -192,13 +204,41 @@ activities.
 
 ### Scheduling a daily (or other interval) sync
 
+If your default Python version is different from the Python 3.9 first you need to find the location of the poetry env executable by issuing a command in your strava-to-fittrackee installation folder:
+
+```sh
+$ poetry env info
+```
+The output should be something like that:
+```
+Virtualenv
+Python:         3.9.5
+Implementation: CPython
+Path:           /home/user/.cache/pypoetry/virtualenvs/strava-to-fittrackee-Yq6o0egg-py3.9
+Executable:     /home/user/.cache/pypoetry/virtualenvs/strava-to-fittrackee-Yq6o0egg-py3.9/bin/python
+Valid:          True
+
+System
+Platform:   linux
+OS:         posix
+Python:     3.9.5
+Path:       /usr
+Executable: /usr/bin/python3.9
+```
+
+Copy the line:
+```
+/home/user/.cache/pypoetry/virtualenvs/strava-to-fittrackee-Yq6o0egg-py3.9/bin/python
+```
+and use it in your cron job line.
+
 The script can be scheduled using a tool such as `cron`, or the Windows task scheduler
 to run at one ore more set times each day. A line such as the following will run
 the script at 9AM, 12PM, 3PM, 6PM, and 9PM every day, logging to a file named `s2f.log`
 in the home directory of `user`:
 
 ```
-0 9,12,15,18,21 * * *  cd /home/user/s2f && /home/user/.local/bin/poetry run python s2f.py --sync -v 2 >> /home/user/s2f.log 2>&1
+0 9,12,15,18,21 * * *  cd /home/user/s2f && /home/user/.local/bin/poetry run /home/user/.cache/pypoetry/virtualenvs/strava-to-fittrackee-Yq6o0egg-py3.9/bin/python s2f.py --sync -v 2 >> /home/user/s2f.log 2>&1
 ```
 
 ### Bulk downloading from Strava
