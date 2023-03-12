@@ -25,6 +25,22 @@ You'll need the following:
       - You'll need to use your "Client ID" and "Client Secret" from this page
   - [Poetry](https://python-poetry.org/) installed on the system where this
     tool will run
+  - A Python installation version 3.9 or higher. Installing this will depend
+    on your specific system, but I highly recommend using 
+    [`pyenv`](https://github.com/pyenv/pyenv), which will allow you to install
+    any version of Python you'd like and choose between them as needed. Assuming
+    you have at least one 3.9 or higher version installed with `pyenv`, Poetry is
+    smart enough to pick up that and use the correct Python version when installing
+    `strava-to-fittrackee`.
+      - If you prefer to use system packages, on recent versions of Ubuntu you should
+        be able to run `sudo apt install python3.9`. If using the system package, you'll
+        probably also need to run `poetry env use 3.9` to configure poetry to use that
+        specific version. 
+      - If using `pyenv`, running `$ pyenv install 3.9.16` or `$ pyenv install 3.10.10`
+        should get you a version that will work with `s2f.py`. In this case, Poetry should
+        be clever enough to analyze the versions of Python you have installed and pick the
+        correct one (although you can also run that `poetry env use` command to specify a
+        particular one)
 
 ## Installation
 
@@ -38,18 +54,6 @@ Copy the `.env.example` file to a file named `.env` and configure the values as
 documented in order to set the appropriate API client IDs and secrets, as well as
 the FitTrackee host (currently, https verification is not enabled because FitTrackee
 is often hosted with a self-signed certificate).
-
-If you have not got python 3.9 installed install it now, on Ubuntu just issue a command:
-
-```sh
-$ sudo apt install python3.9
-```
-
-Set the poetry Python version:
-
-```sh
-$ poetry env use 3.9
-```
 
 Install the script's dependencies by running:
 
@@ -204,42 +208,19 @@ activities.
 
 ### Scheduling a daily (or other interval) sync
 
-If your default Python version is different from the Python 3.9 first you need to find the location of the poetry env executable by issuing a command in your strava-to-fittrackee installation folder:
-
-```sh
-$ poetry env info
-```
-The output should be something like that:
-```
-Virtualenv
-Python:         3.9.5
-Implementation: CPython
-Path:           /home/user/.cache/pypoetry/virtualenvs/strava-to-fittrackee-Yq6o0egg-py3.9
-Executable:     /home/user/.cache/pypoetry/virtualenvs/strava-to-fittrackee-Yq6o0egg-py3.9/bin/python
-Valid:          True
-
-System
-Platform:   linux
-OS:         posix
-Python:     3.9.5
-Path:       /usr
-Executable: /usr/bin/python3.9
-```
-
-Copy the line:
-```
-/home/user/.cache/pypoetry/virtualenvs/strava-to-fittrackee-Yq6o0egg-py3.9/bin/python
-```
-and use it in your cron job line.
-
 The script can be scheduled using a tool such as `cron`, or the Windows task scheduler
 to run at one ore more set times each day. A line such as the following will run
-the script at 9AM, 12PM, 3PM, 6PM, and 9PM every day, logging to a file named `s2f.log`
-in the home directory of `user`:
+the script twice per hour every day, logging to a file named `s2f.log`
+in the home directory of `user`. This example assumes you installed Poetry to its
+default location (run `$ which poetry` to find the correct executable location if
+yours is different):
 
 ```
-0 9,12,15,18,21 * * *  cd /home/user/s2f && /home/user/.local/bin/poetry run /home/user/.cache/pypoetry/virtualenvs/strava-to-fittrackee-Yq6o0egg-py3.9/bin/python s2f.py --sync -v 2 >> /home/user/s2f.log 2>&1
+5,35 * * * *  cd /home/user/s2f && /home/user/.local/bin/poetry run python s2f.py --sync -v 2 >> /home/user/s2f.log 2>&1
 ```
+
+By changing to the `s2f` directory and running the script via `$ poetry run python s2f.py`,
+Poetry should automatically determine the correct Python interpreter to use.
 
 ### Bulk downloading from Strava
 
