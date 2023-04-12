@@ -26,6 +26,22 @@ You'll need the following:
       - You'll need to use your "Client ID" and "Client Secret" from this page
   - [Poetry](https://python-poetry.org/) installed on the system where this
     tool will run
+  - A Python installation version 3.9 or higher. Installing this will depend
+    on your specific system, but I highly recommend using 
+    [`pyenv`](https://github.com/pyenv/pyenv), which will allow you to install
+    any version of Python you'd like and choose between them as needed. Assuming
+    you have at least one 3.9 or higher version installed with `pyenv`, Poetry is
+    smart enough to pick up that and use the correct Python version when installing
+    `strava-to-fittrackee`.
+      - If you prefer to use system packages, on recent versions of Ubuntu you should
+        be able to run `sudo apt install python3.9`. If using the system package, you'll
+        probably also need to run `poetry env use 3.9` to configure poetry to use that
+        specific version. 
+      - If using `pyenv`, running `$ pyenv install 3.9.16` or `$ pyenv install 3.10.10`
+        should get you a version that will work with `s2f.py`. In this case, Poetry should
+        be clever enough to analyze the versions of Python you have installed and pick the
+        correct one (although you can also run that `poetry env use` command to specify a
+        particular one)
 
 ## Installation
 
@@ -213,12 +229,17 @@ activities.
 
 The script can be scheduled using a tool such as `cron`, or the Windows task scheduler
 to run at one ore more set times each day. A line such as the following will run
-the script at 9AM, 12PM, 3PM, 6PM, and 9PM every day, logging to a file named `s2f.log`
-in the home directory of `user`:
+the script twice per hour every day, logging to a file named `s2f.log`
+in the home directory of `user`. This example assumes you installed Poetry to its
+default location (run `$ which poetry` to find the correct executable location if
+yours is different):
 
 ```
-0 9,12,15,18,21 * * *  cd /home/user/s2f && /home/user/.local/bin/poetry run python -m strava_to_fittrackee.s2f --sync -v 2 >> /home/user/s2f.log 2>&1
+5,35 * * * *  cd /home/user/s2f && /home/user/.local/bin/poetry run python -m strava_to_fittrackee.s2f --sync -v 2 >> /home/user/s2f.log 2>&1
 ```
+
+By changing to the `s2f` directory and running the script via `$ poetry run python s2f.py`,
+Poetry should automatically determine the correct Python interpreter to use.
 
 ### Bulk downloading from Strava
 
