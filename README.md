@@ -12,7 +12,8 @@ You'll need the following:
   - An installation of [FitTrackee](https://github.com/SamR1/FitTrackee/)
   - An OAuth2 application configured for FitTrackee (go to the "Apps" section
     of your FitTrackee account to configure this)
-      - The app needs access to the `workouts:read` and `workouts:write` scopes
+      - The app needs access to the `workouts:read`, `workouts:write`, and
+        `profile:read` scopes (the last one so we can get the user's timezone for activities without GPS data)
       - You'll need to use the "Id" and "Secret" (only showed at creation time)
         to configure this script, so make sure to write them down
       - When you create your app, the Application URL and Redirect URL can be pretty
@@ -42,10 +43,27 @@ is often hosted with a self-signed certificate).
 Install the script's dependencies by running:
 
 ```sh
-$ poetry install --no-root
+$ poetry install
 ```
 
-This will create new virtual environment and install the dependencies for the script.
+This will create new virtual environment and install the module and script.
+
+## Updating
+
+If you would like to update your version of the script, pull the latest code from git,
+and re-run the poetry install command in case there were any new dependencies added:
+
+```sh
+$ git pull
+$ poetry install
+```
+
+*Note*: This happens infrequently, but in the event the script needs new permissions
+(e.g. v0.2.0 required a new `profile:read` permission), you will need to re-run the
+application authorization flow. The best way to do this is to delete and re-create the
+API application you created in the FitTrackee web interface (making sure to use the new
+permissions required), delete the local `.fittrackee.tokens.json` file, and update your
+`.env` file to use the updated client ID and client secret from the new API app.
 
 ## Usage
 
@@ -57,36 +75,37 @@ by Poetry. Run the following from the directory you downloaded the files to in o
 see the "help" output of the script, which will show what it can do:
 
 ```sh
-$ poetry run python s2f.py -h
+$ poetry run python -m strava_to_fittrackee.s2f -h
 ```
 ```
-usage: s2f.py [-h] [-v {0,1,2}] (--setup-tokens | --sync | --download-all-strava | --upload-all-fittrackee | --delete-all-fittrackee | --upload-gpx GPX_FILE)
+usage: s2f.py [-h] [-v {0,1,2}] (-V | --setup-tokens | --sync | --download-all-strava | --upload-all-fittrackee | --delete-all-fittrackee | --upload-gpx GPX_FILE)
               [--output-folder OUTPUT_FOLDER] [--input-folder INPUT_FOLDER]
 
-This tool provides functionality to download activities from
-a Strava "athlete" and upload them as workouts to a FitTrackee
-instance (see README.md for more details)
+This tool provides functionality to download activities from a Strava "athlete" and
+upload them as workouts to a FitTrackee instance (see README.md for more details)
 
 Examples (in your terminal):
-    $ python s2f.py --sync
-    $ python s2f.py --download-all-strava --output-folder <folder_name>
-    $ python s2f.py --upload-all-fittrackee --input-folder <folder_name>
-    $ python s2g.py --delete-all-fittrackee
+    $ python -m strava_to_fittrackee.s2f --sync
+    $ python -m strava_to_fittrackee.s2f --download-all-strava --output-folder <folder_name>
+    $ python -m strava_to_fittrackee.s2f --upload-all-fittrackee --input-folder <folder_name>
+    $ python -m strava_to_fittrackee.s2f --delete-all-fittrackee
 
-Copyright (c) 2022, Joshua Taillon
+Copyright (c) 2022-2023, Joshua Taillon
+v0.2.0
 
 optional arguments:
   -h, --help            show this help message and exit
   -v {0,1,2}, --verbosity {0,1,2}
                         increase output verbosity (default: 1)
-  --setup-tokens        Setup initial token authentication for both Strava and FitTrackee. This will be done automatically if they are not already set up, but this
-                        option allows you to do that without performing any other actions
+  -V, --version         display the program's version
+  --setup-tokens        Setup initial token authentication for both Strava and FitTrackee. This will be done automatically if they are not already set up, but this option allows you to
+                        do that without performing any other actions
   --sync                Download activities from Strava not currently present in FitTrackee and upload them to the FitTrackee instance
   --download-all-strava
                         Download and store all Strava activities as GPX files in the given folder (default: "./gpx/", but can be changed with "--output-folder" option)
   --upload-all-fittrackee
-                        Upload all GPX files in the given folder as workouts to the configured FitTrackee instance. (default folder is "./gpx/", but can be configured
-                        with the "--input-folder" option)
+                        Upload all GPX files in the given folder as workouts to the configured FitTrackee instance. (default folder is "./gpx/", but can be configured with the "--input-
+                        folder" option)
   --delete-all-fittrackee
                         Delete all workouts in the configured FitTrackee instance
   --upload-gpx GPX_FILE
@@ -103,7 +122,7 @@ To get started with the script, you'll need to authorize your "API apps" (create
 for both Strava and FitTrackee. To do this, run the script with the `--setup-tokens` option:
 
 ```sh
-$ poetry run python s2f.py --setup-tokens
+$ poetry run python -m strava_to_fittrackee.s2f --setup-tokens
 ```
 
 This will first present you (in the terminal) with a link to Strava, which (after logging in) 
@@ -144,7 +163,7 @@ need to go through the URL authorization again if you delete or rename the token
 Once your tokens are set up, run the script with the `--sync` option:
 
 ```
-$ poetry run python s2f.py --sync
+$ poetry run python -m strava_to_fittrackee.s2f --sync
 ```
 
 This will check your FitTrackee account for the last workout, and then fetch
@@ -198,7 +217,7 @@ the script at 9AM, 12PM, 3PM, 6PM, and 9PM every day, logging to a file named `s
 in the home directory of `user`:
 
 ```
-0 9,12,15,18,21 * * *  cd /home/user/s2f && /home/user/.local/bin/poetry run python s2f.py --sync -v 2 >> /home/user/s2f.log 2>&1
+0 9,12,15,18,21 * * *  cd /home/user/s2f && /home/user/.local/bin/poetry run python -m strava_to_fittrackee.s2f --sync -v 2 >> /home/user/s2f.log 2>&1
 ```
 
 ### Bulk downloading from Strava
@@ -208,14 +227,14 @@ limitations described above), if you'd ever like to bulk export activities from 
 and save the resulting GPX files to disk, use the `--download-all-strava` option:
 
 ```sh
-$ poetry run python s2f.py --download-all-strava
+$ poetry run python -m strava_to_fittrackee.s2f --download-all-strava
 ```
 
 By default, this will download all your activities into a subfolder named `./gpx`,
 but this location can be changed with the `--output-folder` option, *e.g.*:
 
 ```sh
-$ poetry run python s2f.py --download-all-strava --output-folder /home/user/Downloads/
+$ poetry run python -m strava_to_fittrackee.s2f --download-all-strava --output-folder /home/user/Downloads/
 ```
 
 You will likely run up against the Strava API limits with this method as well, and so
@@ -242,7 +261,7 @@ that will upload a single GPX file to the FitTrackee instance. Provide the path 
 file after the `--upload-gpx` option as follows:
 
 ```sh
-$ poetry run python s2f.py --upload-gpx ./gpx/test_file.gpx
+$ poetry run python -m strava_to_fittrackee.s2f --upload-gpx ./gpx/test_file.gpx
 ```
 
 ### Delete all FitTrackee workouts
@@ -252,7 +271,7 @@ the API to delete *all* workouts from the instance. The script will ask you to c
 this is really what you want to do before actually doing it:
 
 ```sh
-$ poetry run python s2f.py --delete-all-fittrackee -v 2
+$ poetry run python -m strava_to_fittrackee.s2f --delete-all-fittrackee -v 2
 ```
 ```
 DEBUG:s2f:Initializing FitTrackeeConnector
