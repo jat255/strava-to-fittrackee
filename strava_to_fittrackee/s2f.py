@@ -1,31 +1,31 @@
 """
-This tool provides functionality to download activities from
-a Strava "athlete" and upload them as workouts to a FitTrackee
-instance (see README.md for more details)
+This tool provides functionality to download activities from a Strava "athlete" and
+upload them as workouts to a FitTrackee instance (see README.md for more details)
 
 Examples (in your terminal):
-    $ python s2f.py --sync
-    $ python s2f.py --download-all-strava --output-folder <folder_name>
-    $ python s2f.py --upload-all-fittrackee --input-folder <folder_name>
-    $ python s2g.py --delete-all-fittrackee
+    $ python -m strava_to_fittrackee.s2f --sync
+    $ python -m strava_to_fittrackee.s2f --download-all-strava --output-folder <folder_name>
+    $ python -m strava_to_fittrackee.s2f --upload-all-fittrackee --input-folder <folder_name>
+    $ python -m strava_to_fittrackee.s2f --delete-all-fittrackee
 
-Copyright (c) 2022, Joshua Taillon
+Copyright (c) 2022-2023, Joshua Taillon
 """
 import argparse
 import atexit
 import csv
 import json
+import importlib.metadata
 import logging
 import os
-import subprocess
 import tempfile
 import time
 from datetime import datetime, timedelta
 from email.utils import parsedate_to_datetime
 from pathlib import Path
-from typing import Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 import gpxpy
+import pytz
 import urllib3
 from dotenv import load_dotenv
 from requests import Response
@@ -39,6 +39,7 @@ logger.setLevel(logging.DEBUG)
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 script_dir = Path(__file__).parent
 
+__version__ = importlib.metadata.version("strava_to_fittrackee")
 
 def setup_logging(level: int = 2):
     level_map = {0: logging.WARNING, 1: logging.INFO, 2: logging.DEBUG}
@@ -77,7 +78,7 @@ def setup_tempdir():
 def cmdline_args():
     # Make parser object
     p = argparse.ArgumentParser(
-        description=__doc__,
+        description=__doc__ + f"v{__version__}",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 
@@ -91,6 +92,14 @@ def cmdline_args():
     )
 
     group1 = p.add_mutually_exclusive_group(required=True)
+    
+    group1.add_argument(
+        "-V",
+        "--version",
+        help="display the program's version",
+        action="store_true"
+    )
+
     group1.add_argument(
         "--setup-tokens",
         help=(
@@ -380,6 +389,21 @@ class StravaConnector:
             activities = r.json()
             return activities
 
+
+    def filter_response_by_key(
+        self,
+        response: List[Dict],
+        type_key: str,
+        null_return: Any
+    ):
+        if not response:
+            return null_return
+        
+        response = list(filter(lambda d: d['type'] == type_key, response))
+        
+        return response[0]['data'] if response else null_return
+        
+
     def create_activity_from_strava(self, activity: dict, get_streams: bool = True):
         activity_id = activity["id"]
         if activity["manual"] and get_streams:
@@ -395,7 +419,8 @@ class StravaConnector:
                 params={"keys": ["latlng"]},
             )
             custom_raise_for_status(r)
-            latlng = r.json()[0]["data"]
+            latlng = self.filter_response_by_key(r.json(), 'latlng', [(None, None)])
+            distance = self.filter_response_by_key(r.json(), 'distance', [0])
 
             logger.debug(f"Getting timepoints for activity {activity_id}")
             r = self.client.get(
@@ -403,7 +428,7 @@ class StravaConnector:
                 params={"keys": ["time"]},
             )
             custom_raise_for_status(r)
-            time_list = r.json()[1]["data"]
+            time_list = self.filter_response_by_key(r.json(), 'time', [0])
 
             logger.debug(f"Getting altitude for activity {activity_id}")
             r = self.client.get(
@@ -411,7 +436,8 @@ class StravaConnector:
                 params={"keys": ["altitude"]},
             )
             custom_raise_for_status(r)
-            altitude = r.json()[1]["data"]
+            altitude = self.filter_response_by_key(r.json(), 'altitude', [None])
+
 
             logger.debug(f"Getting velocity for activity {activity_id}")
             r = self.client.get(
@@ -419,7 +445,7 @@ class StravaConnector:
                 params={"keys": ["velocity_smooth"]},
             )
             custom_raise_for_status(r)
-            velocity = r.json()[0]["data"]
+            velocity = self.filter_response_by_key(r.json(), 'velocity_smooth', [None])
         else:
             latlng = [(None, None)]
             time_list = [0]
@@ -432,11 +458,12 @@ class StravaConnector:
             time_list=time_list,
             altitude=altitude,
             velocity=velocity,
+            distance=distance,
         )
 
 
 class Activity:
-    def __init__(self, activity_dict, latlng, time_list, altitude, velocity):
+    def __init__(self, activity_dict, latlng, time_list, altitude, velocity, distance):
         self.title = activity_dict["name"]
         self.activity_dict = activity_dict
         self.start_time = datetime.strptime(
@@ -447,6 +474,9 @@ class Activity:
         self.time = [(self.start_time + timedelta(seconds=t)) for t in time_list]
         self.altitude = altitude
         self.velocity = velocity
+        self.distance = distance
+        self.type = activity_dict["type"]
+        self.link = f"https://strava.com/activities/{activity_dict['id']}"
 
     def as_gpx(self) -> gpxpy.gpx.GPX:
         """
@@ -458,9 +488,9 @@ class Activity:
 
         # Create first track in our GPX:
         gpx_track = gpxpy.gpx.GPXTrack(
-            name=self.title, description=self.activity_dict["type"]
+            name=self.title, description=self.type
         )
-        gpx_track.link = f"https://strava.com/activities/{self.activity_dict['id']}"
+        gpx_track.link = self.link
         gpx.tracks.append(gpx_track)
 
         # Create first segment in our GPX track:
@@ -488,7 +518,6 @@ class FitTrackeeConnector:
     two should be refactored into sub-classes of one common base, but that
     is more work than I care to do upon initial writing.
     """
-
     def __init__(self, verify=False):
         logger.debug("Initializing FitTrackeeConnector")
         self.tokens = load_conf("FITTRACKEE_TOKEN_FILE")
@@ -501,6 +530,26 @@ class FitTrackeeConnector:
         self.token_url = self.base_url + "/oauth/token"
         self.client = self.auth()
         self.sports = None
+        self.timezone = None
+
+        # Mapping from Strava activity types to FitTrackee workout sport id values
+        # use first sport id if we don't have a description
+        # (will be wrong, but better than error)
+        self.sport_id_map = {
+            None: 1,
+            "Ride": self.get_sport_id("Cycling (Sport)"),
+            "VirtualRide": self.get_sport_id("Cycling (Virtual)"),
+            "Hike": self.get_sport_id("Hiking"),
+            "Walk": self.get_sport_id("Walking"),
+            "MountainBikeRide": self.get_sport_id("Mountain Biking"),
+            "EMountainBikeRide": self.get_sport_id("Mountain Biking (Electric)"),
+            "Rowing": self.get_sport_id("Rowing"),
+            "Run": self.get_sport_id("Running"),
+            "AlpineSki": self.get_sport_id("Skiing (Alpine)"),
+            "NordicSki": self.get_sport_id("Skiing (Cross Country)"),
+            "Snowshoe": self.get_sport_id("Snowshoes"),
+            "TrailRun": self.get_sport_id("Trail"),
+        }
 
     def auth(self):
         """
@@ -520,7 +569,7 @@ class FitTrackeeConnector:
     def web_application_flow(self):
         logger.debug("Running FitTrackee Web Application Flow")
         redirect_uri = f"https://self.host/callback"
-        scope = "workouts:read workouts:write"
+        scope = "workouts:read workouts:write profile:read"
         oauth = OAuth2Session(self.client_id, redirect_uri=redirect_uri, scope=scope)
         authorization_url, state = oauth.authorization_url(self.authorize_url)
         print(f"\nPlease go to {authorization_url} and authorize access.")
@@ -616,6 +665,15 @@ class FitTrackeeConnector:
             return sport_dict[0]["id"]
         else:
             return None
+    
+    def get_user_timezone(self, force_update=False):
+        """Get the user timezone from the API and store it as attribute."""
+        if self.timezone is None or force_update:
+            r = self.client.get(self.base_url + "/auth/profile", verify=self.verify)
+            r.raise_for_status()
+            self.timezone = r.json()['data']['timezone']
+
+        return self.timezone
 
     def upload_gpx(self, gpx_file: Union[str, Path]):
         """
@@ -654,23 +712,8 @@ class FitTrackeeConnector:
         # Mapping from Strava activity types to FitTrackee workout sport id values
         # use first sport id if we don't have a description
         # (will be wrong, but better than error)
-        sport_id_map = {
-            None: 1,
-            "Ride": self.get_sport_id("Cycling (Sport)"),
-            "VirtualRide": self.get_sport_id("Cycling (Virtual)"),
-            "Hike": self.get_sport_id("Hiking"),
-            "Walk": self.get_sport_id("Walking"),
-            "MountainBikeRide": self.get_sport_id("Mountain Biking"),
-            "EMountainBikeRide": self.get_sport_id("Mountain Biking (Electric)"),
-            "Rowing": self.get_sport_id("Rowing"),
-            "Run": self.get_sport_id("Running"),
-            "AlpineSki": self.get_sport_id("Skiing (Alpine)"),
-            "NordicSki": self.get_sport_id("Skiing (Cross Country)"),
-            "Snowshoe": self.get_sport_id("Snowshoes"),
-            "TrailRun": self.get_sport_id("Trail"),
-        }
         data = {
-            "sport_id": sport_id_map[activity_type],
+            "sport_id": self.sport_id_map[activity_type],
             "notes": (
                 "Uploaded with Strava-to-FitTrackee\nOriginal activity type"
                 f' on Strava was "{activity_type}"'
@@ -696,6 +739,48 @@ class FitTrackeeConnector:
             self.base_url + "/workouts",
             files=dict(file=open(gpx_file, "r")),
             data=dict(data=json.dumps(data)),
+            verify=self.verify,
+        )
+        r.raise_for_status()
+
+
+    def upload_no_gpx(self, activity: Activity):
+        """
+        POST a workout to the FitTrackee API without any GPS data (manual activity)
+        https://samr1.github.io/FitTrackee/api/workouts.html#post--api-workouts
+        """
+        activity_type = activity.type
+        url = activity.link
+        if not activity_type:
+            logger.warning(
+                "Did not find activity type; will use sport_id = 1 which might"
+                " be incorrect"
+            )
+
+        # need to localize activity.start_time, which is in UTC
+        tz = pytz.timezone(self.get_user_timezone())
+        workout_dt = pytz.UTC.localize(activity.start_time).astimezone(tz)
+        workout_date = workout_dt.strftime("%Y-%m-%d %H:%M")
+
+        data = {
+            "sport_id": self.sport_id_map[activity_type],
+            "notes": (
+                "Uploaded with Strava-to-FitTrackee\nOriginal activity type"
+                f' on Strava was "{activity_type}"'
+            ),
+            "title": activity.title,
+            "distance": activity.distance[-1] / 1000.0,
+            "duration": (activity.time[-1] - activity.time[0]).seconds,
+            "workout_date": workout_date
+        }
+
+        if url:
+            data["notes"] += f"\nOriginal Strava link: {url}"
+
+        logger.debug(f"POSTing workout with no GPX to FitTrackee")
+        r = self.client.post(
+            self.base_url + "/workouts/no_gpx",
+            json=data,
             verify=self.verify,
         )
         r.raise_for_status()
@@ -887,15 +972,19 @@ def sync_strava_with_fittrackee():
                 # generate GPX and upload to FitTrackee
                 logger.debug(f'Processing Strava activity {a["id"]}')
                 act = strava.create_activity_from_strava(a, get_streams=True)
-                temp_file = tempdir.name + f'/{act.activity_dict["id"]}.gpx'
-                logger.debug(f"Writing Strava activity gpx to {temp_file}")
-                with open(temp_file, "w") as f:
-                    f.write(act.as_xml())
-                logger.info(
-                    f"Uploading workout {i+1} of {len(to_process)} to FitTrackee"
-                )
-                logger.debug(f"Uploading {temp_file} to FitTrackee")
-                fittrackee.upload_gpx(temp_file)
+                if act.lat == [None] and act.long == [None]:
+                    # we don't have any GPS data, so do manual activity
+                    fittrackee.upload_no_gpx(act)
+                else:
+                    temp_file = tempdir.name + f'/{act.activity_dict["id"]}.gpx'
+                    logger.debug(f"Writing Strava activity gpx to {temp_file}")
+                    with open(temp_file, "w") as f:
+                        f.write(act.as_xml())
+                    logger.info(
+                        f"Uploading workout {i+1} of {len(to_process)} to FitTrackee"
+                    )
+                    logger.debug(f"Uploading {temp_file} to FitTrackee")
+                    fittrackee.upload_gpx(temp_file)
                 i += 1
             except TooManyRequestsError:
                 logger.warning(
@@ -926,6 +1015,8 @@ def ask_user_to_confirm():
 
 if __name__ == "__main__":
     args = cmdline_args()
+    if args.version:
+        print(f"strava-to-fittrackee v{__version__}")
     setup_logging(args.verbosity)
     check_for_running_instance()
     if args.setup_tokens:
