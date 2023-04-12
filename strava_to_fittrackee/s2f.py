@@ -257,6 +257,7 @@ class StravaConnector:
         self.base_url = "https://www.strava.com/api/v3"
         self.token_url = self.base_url + "/oauth/token"
         self.client = self.auth()
+        self.gear = {}
 
     def web_application_flow(self):
         logger.debug("Running Web Application Flow")
@@ -389,6 +390,33 @@ class StravaConnector:
             activities = r.json()
             return activities
 
+    def get_gear(self, gear_id: str) -> Dict:
+        """
+        Get gear definition from local store, or API if necessary.
+        
+        Takes a gear identifier (string) and will return the dict returned by the Strava
+        API for that gear. It will cache the result locally in this connector to save
+        network resources on subsequent queries
+
+        Parameters
+        ----------
+        gear_id
+            The identifier string for a piece of gear (as used in the activity response)
+
+        Returns
+        -------
+        dict
+            The API response for this piece of gear
+        """
+        if gear_id in self.gear:
+            return self.gear[gear_id]
+        r = self.client.get(
+            self.base_url + f"/gear/{gear_id}"
+        )
+        custom_raise_for_status(r)
+        self.gear[gear_id] = r.json()
+
+        return self.gear[gear_id]
 
     def filter_response_by_key(
         self,
@@ -452,6 +480,9 @@ class StravaConnector:
             altitude = [None]
             velocity = [None]
 
+        # process gear (will be None if no gear defined on activity)
+        gear = self.get_gear(activity["gear_id"]) if activity["gear_id"] else None
+        
         return Activity(
             activity_dict=activity,
             latlng=latlng,
@@ -459,11 +490,21 @@ class StravaConnector:
             altitude=altitude,
             velocity=velocity,
             distance=distance,
+            gear=gear,
         )
 
 
 class Activity:
-    def __init__(self, activity_dict, latlng, time_list, altitude, velocity, distance):
+    def __init__(
+        self,
+        activity_dict,
+        latlng,
+        time_list,
+        altitude,
+        velocity,
+        distance,
+        gear,
+    ):
         self.title = activity_dict["name"]
         self.activity_dict = activity_dict
         self.start_time = datetime.strptime(
@@ -477,6 +518,25 @@ class Activity:
         self.distance = distance
         self.type = activity_dict["type"]
         self.link = f"https://strava.com/activities/{activity_dict['id']}"
+        self.gear = gear
+        self.gear_note = self.get_gear_note()
+
+    def as_dict(self) -> Dict:
+        return {
+            'title': self.title,
+            'activity_dict': self.activity_dict,
+            'start_time': self.start_time.isoformat(),
+            'lat': self.lat,
+            'long': self.long,
+            'time': [i.isoformat() for i in self.time],
+            'altitude': self.altitude,
+            'velocity': self.velocity,
+            'distance': self.distance,
+            'type': self.type,
+            'link': self.link,
+            'gear': self.gear,
+            'gear_note': self.gear_note,
+        }
 
     def as_gpx(self) -> gpxpy.gpx.GPX:
         """
@@ -491,6 +551,8 @@ class Activity:
             name=self.title, description=self.type
         )
         gpx_track.link = self.link
+        # store activity json as comment in gpx_track
+        gpx_track.comment = json.dumps(self.as_dict())
         gpx.tracks.append(gpx_track)
 
         # Create first segment in our GPX track:
@@ -508,8 +570,20 @@ class Activity:
         return gpx
 
     def as_xml(self):
-        """Export this activity's GPX (XML) representation as a string"""
+        """Export this activity's GPX (XML) representation as a string."""
         return self.as_gpx().to_xml()
+
+    def get_gear_note(self):
+        """Get description of gear (if any) for the notes field."""
+        if self.gear is None:
+            return ""
+        
+        note = (
+            f"\n\nGear used: {self.gear['name']} "
+            f"(cumulative distance: {self.gear['converted_distance']})"
+        )
+        return note
+
 
 
 class FitTrackeeConnector:
@@ -698,17 +772,21 @@ class FitTrackeeConnector:
         # get "desc" parameter, assuming it holds the Strava activity type
         with open(gpx_file, "r") as f:
             gpx = gpxpy.parse(f)
+
         if gpx.tracks:
             activity_type = gpx.tracks[0].description
             url = gpx.tracks[0].link
+            activity_dict = json.loads(gpx.tracks[0].comment)
+            gpx.tracks[0].comment = None
         else:
             activity_type = None
             url = None
+            activity_dict = None
             logger.warning(
                 "Did not find activity type; will use sport_id = 1 which might"
                 " be incorrect"
             )
-
+        
         # Mapping from Strava activity types to FitTrackee workout sport id values
         # use first sport id if we don't have a description
         # (will be wrong, but better than error)
@@ -734,7 +812,14 @@ class FitTrackeeConnector:
 
         if url:
             data["notes"] += f"\nOriginal Strava link: {url}"
-        # logger.debug(f"POSTing {gpx_file} to FitTrackee")
+        
+        if activity_dict:
+            logger.info("Rewriting GPX file without comment field")
+            with open(gpx_file, "w") as f:
+                print(gpx.to_xml(), file=f)
+            data["notes"] += activity_dict['gear_note']
+
+        logger.debug(f"POSTing {gpx_file} to FitTrackee")
         r = self.client.post(
             self.base_url + "/workouts",
             files=dict(file=open(gpx_file, "r")),
@@ -776,6 +861,8 @@ class FitTrackeeConnector:
 
         if url:
             data["notes"] += f"\nOriginal Strava link: {url}"
+
+        data["notes"] += activity.gear_note
 
         logger.debug(f"POSTing workout with no GPX to FitTrackee")
         r = self.client.post(
