@@ -439,6 +439,7 @@ class StravaConnector:
                 f"Strava activity {activity_id} had no GPS data; cannot download GPX!"
             )
             get_streams = False
+            distance = 0
 
         if get_streams:
             logger.debug(f"Getting latitude and longitude for activity {activity_id}")
@@ -1061,7 +1062,10 @@ def sync_strava_with_fittrackee():
                 act = strava.create_activity_from_strava(a, get_streams=True)
                 if act.lat == [None] and act.long == [None]:
                     # we don't have any GPS data, so do manual activity
-                    fittrackee.upload_no_gpx(act)
+                    if act.type in fittrackee.sport_id_map:
+                        fittrackee.upload_no_gpx(act)
+                    else:
+                        logger.warning(f"Activity type {act.type} not recognized in FitTrackee, skipping!")
                 else:
                     temp_file = tempdir.name + f'/{act.activity_dict["id"]}.gpx'
                     logger.debug(f"Writing Strava activity gpx to {temp_file}")
