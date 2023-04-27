@@ -748,6 +748,14 @@ class FitTrackeeConnector:
             self.timezone = r.json()['data']['timezone']
 
         return self.timezone
+    
+    def localize_utc_datetime(self, dt: datetime):
+        """
+        Given a UTC datetime, localize it to the timezone of the user.
+        """
+        tz = pytz.timezone(self.get_user_timezone())
+        localized_dt = pytz.UTC.localize(dt).astimezone(tz)
+        return localized_dt
 
     def upload_gpx(self, gpx_file: Union[str, Path]):
         """
@@ -843,8 +851,7 @@ class FitTrackeeConnector:
             )
 
         # need to localize activity.start_time, which is in UTC
-        tz = pytz.timezone(self.get_user_timezone())
-        workout_dt = pytz.UTC.localize(activity.start_time).astimezone(tz)
+        workout_dt = self.localize_utc_datetime(activity.start_time)
         workout_date = workout_dt.strftime("%Y-%m-%d %H:%M")
 
         data = {
@@ -891,17 +898,18 @@ def activity_has_matching_workout(
 ) -> bool:
     """
     Helper function to check if there is a workout in the FitTrackee instance
-    with 30 minutes of the Strava activity in question. Helps to prevent
+    within 5 minutes of the Strava activity in question. Helps to prevent
     duplicates from being uploaded into FitTrackee.
 
     ``activity`` should be a single activity dictionary as returned by the
     ``StravaConnector.get_activities()`` method
     """
     activity_dt = datetime.strptime(activity["start_date"], "%Y-%m-%dT%H:%M:%SZ")
+    activity_dt = fittrackee.localize_utc_datetime(activity_dt)
     activity_date_str = activity_dt.strftime("%Y-%m-%d")
 
-    lower_window = activity_dt - timedelta(minutes=30)
-    upper_window = activity_dt + timedelta(minutes=30)
+    lower_window = activity_dt - timedelta(minutes=5)
+    upper_window = activity_dt + timedelta(minutes=5)
     # search for FitTrackee workouts on same day
     same_day_workouts = fittrackee.get_workouts(
         limit=None, start_date=activity_date_str, end_date=activity_date_str
@@ -909,7 +917,7 @@ def activity_has_matching_workout(
     overlapping_workouts = list(
         filter(
             lambda w: lower_window
-            < parsedate_to_datetime(w["workout_date"]).replace(tzinfo=None)
+            < parsedate_to_datetime(w["workout_date"])
             < upper_window,
             same_day_workouts,
         )
