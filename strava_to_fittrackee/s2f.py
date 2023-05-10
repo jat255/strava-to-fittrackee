@@ -476,6 +476,7 @@ class StravaConnector:
             velocity = self.filter_response_by_key(r.json(), 'velocity_smooth', [None])
         else:
             latlng = [(None, None)]
+            distance = [0]
             time_list = [0]
             altitude = [None]
             velocity = [None]
@@ -1067,6 +1068,15 @@ def sync_strava_with_fittrackee():
                 # generate GPX and upload to FitTrackee
                 logger.debug(f'Processing Strava activity {a["id"]}')
                 act = strava.create_activity_from_strava(a, get_streams=True)
+                
+                # skip this activity if we don't know its sport type
+                if act.type not in fittrackee.sport_id_map:
+                    logger.warning(
+                        f"Activity type {act.type} not recognized in FitTrackee, skipping!"
+                    )
+                    i += 1
+                    continue
+                
                 if act.lat == [None] and act.long == [None]:
                     # we don't have any GPS data, so do manual activity
                     fittrackee.upload_no_gpx(act)
