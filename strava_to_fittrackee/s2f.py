@@ -310,6 +310,43 @@ class StravaConnector:
             logger.debug("Using existing Strava tokens with self-refreshing client")
             return self.get_refreshing_client()
 
+    def get_detailed_activity(
+        self,
+        activity_dict: Dict
+    ):
+        """
+        Get the details for a specific activity from the Strava API.
+
+        Given an activity response from the ``/athlete/activities`` endpoint,
+        get the DetailedActivity
+        (https://developers.strava.com/docs/reference/#api-models-DetailedActivity)
+        representation of that activity (only used for getting the description,
+        currently).
+
+        Parameters:
+        -----------
+        activity_dict:
+            A dictionary representation of a SummaryActivity from the Strava
+            API (https://developers.strava.com/docs/reference/#api-models-SummaryActivity)
+        """
+        success = False
+        while not success:
+            try:
+                logger.debug(
+                    f"Getting activity details for activity {activity_dict['id']}"
+                )
+                r = self.client.get(
+                    self.base_url + f"/activities/{activity_dict['id']}"
+                )
+                custom_raise_for_status(r)
+                success = True
+            except TooManyRequestsError:
+                logger.warning(
+                    "Hit Strava API limit; sleeping until next 15 minute interval"
+                )
+                wait_until_fifteen()
+        return r.json()
+
     def get_activities(
         self,
         limit: Union[int, None] = 30,
@@ -358,7 +395,7 @@ class StravaConnector:
                         "No more activities found "
                         f"(total activities: {len(all_activities)})"
                     )
-                    return all_activities
+                    return [self.get_detailed_activity(a) for a in all_activities]
                 else:
                     all_activities.extend(r.json())
                     logger.debug(
@@ -388,7 +425,7 @@ class StravaConnector:
                     )
                     wait_until_fifteen()
             activities = r.json()
-            return activities
+            return [self.get_detailed_activity(a) for a in activities]
 
     def get_gear(self, gear_id: str) -> Dict:
         """
@@ -448,7 +485,7 @@ class StravaConnector:
             )
             custom_raise_for_status(r)
             latlng = self.filter_response_by_key(r.json(), 'latlng', [(None, None)])
-            distance = self.filter_response_by_key(r.json(), 'distance', [0])
+            distance = self.filter_response_by_key(r.json(), 'distance', [0.0, activity['distance']])
 
             logger.debug(f"Getting timepoints for activity {activity_id}")
             r = self.client.get(
@@ -456,7 +493,7 @@ class StravaConnector:
                 params={"keys": ["time"]},
             )
             custom_raise_for_status(r)
-            time_list = self.filter_response_by_key(r.json(), 'time', [0])
+            time_list = self.filter_response_by_key(r.json(), 'time', [0.0, activity['moving_time']])
 
             logger.debug(f"Getting altitude for activity {activity_id}")
             r = self.client.get(
@@ -476,13 +513,15 @@ class StravaConnector:
             velocity = self.filter_response_by_key(r.json(), 'velocity_smooth', [None])
         else:
             latlng = [(None, None)]
-            distance = [0]
-            time_list = [0]
+            distance = [0.0, activity['distance']]
+            time_list = [0, activity['moving_time']]
             altitude = [None]
             velocity = [None]
 
         # process gear (will be None if no gear defined on activity)
         gear = self.get_gear(activity["gear_id"]) if activity["gear_id"] else None
+
+        description = activity["description"]
         
         return Activity(
             activity_dict=activity,
@@ -492,6 +531,7 @@ class StravaConnector:
             velocity=velocity,
             distance=distance,
             gear=gear,
+            description=description
         )
 
 
@@ -505,6 +545,7 @@ class Activity:
         velocity,
         distance,
         gear,
+        description,
     ):
         self.title = activity_dict["name"]
         self.activity_dict = activity_dict
@@ -521,6 +562,7 @@ class Activity:
         self.link = f"https://strava.com/activities/{activity_dict['id']}"
         self.gear = gear
         self.gear_note = self.get_gear_note()
+        self.description = description
 
     def as_dict(self) -> Dict:
         return {
@@ -537,6 +579,7 @@ class Activity:
             'link': self.link,
             'gear': self.gear,
             'gear_note': self.gear_note,
+            'description': self.description,
         }
 
     def as_gpx(self) -> gpxpy.gpx.GPX:
@@ -827,6 +870,8 @@ class FitTrackeeConnector:
             with open(gpx_file, "w") as f:
                 print(gpx.to_xml(), file=f)
             data["notes"] += activity_dict['gear_note']
+            data["notes"] += "\n\nStrava description:\n" + \
+                activity_dict['description'].replace('\r\n', '\n')
 
         logger.debug(f"POSTing {gpx_file} to FitTrackee")
         r = self.client.post(
@@ -871,6 +916,10 @@ class FitTrackeeConnector:
             data["notes"] += f"\nOriginal Strava link: {url}"
 
         data["notes"] += activity.gear_note
+
+        if activity.description:
+            data["notes"] += "\n\nStrava description:\n" + \
+                activity.description.replace('\r\n', '\n')
 
         logger.debug(f"POSTing workout with no GPX to FitTrackee")
         r = self.client.post(
