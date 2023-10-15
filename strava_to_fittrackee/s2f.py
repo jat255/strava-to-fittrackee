@@ -522,6 +522,7 @@ class StravaConnector:
         gear = self.get_gear(activity["gear_id"]) if activity["gear_id"] else None
 
         description = activity["description"]
+        description = "" if description is None else description
         
         return Activity(
             activity_dict=activity,

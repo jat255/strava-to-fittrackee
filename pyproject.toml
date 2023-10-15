@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "strava-to-fittrackee"
-version = "0.2.3"
+version = "0.2.5"
 description = "Pull workouts from Strava and upload to FitTrackee"
 authors = ["Joshua Taillon <jat255@gmail.com>"]
 license = "MIT"
