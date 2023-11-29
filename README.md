@@ -5,6 +5,8 @@ account and push them to a [FitTrackee](https://github.com/SamR1/FitTrackee/) in
 The tool was written to help automatically backup workout tracks from the commercial
 service onto a self-hosted instance for safe keeping.
 
+![api_logo_pwrdBy_strava_horiz_light](https://github.com/jat255/strava-to-fittrackee/assets/1278301/983ca56a-3567-49ae-b476-15d97506eba1)
+
 ## Prerequisites
 
 You'll need the following:
