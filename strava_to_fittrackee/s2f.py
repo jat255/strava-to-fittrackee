@@ -181,8 +181,8 @@ def custom_raise_for_status(r: Response, log_api_usage: bool = True):
     (if requested), raises a custom error if the request is over the API
     limits, and then calls the requests module's ``raise_for_status()``
     """
-    fifteen_usage, daily_usage = dict(r.headers)["X-RateLimit-Usage"].split(",")
-    fifteen_limit, daily_limit = dict(r.headers)["X-RateLimit-Limit"].split(",")
+    fifteen_usage, daily_usage = dict(r.headers)["x-ratelimit-usage"].split(",")
+    fifteen_limit, daily_limit = dict(r.headers)["x-ratelimit-limit"].split(",")
     if log_api_usage:
         logger.debug(
             "Current API usage -- 15 minute:"
