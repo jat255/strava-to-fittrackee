@@ -181,14 +181,18 @@ def custom_raise_for_status(r: Response, log_api_usage: bool = True):
     (if requested), raises a custom error if the request is over the API
     limits, and then calls the requests module's ``raise_for_status()``
     """
-    fifteen_usage, daily_usage = dict(r.headers)["x-readratelimit-usage"].split(",")
-    fifteen_limit, daily_limit = dict(r.headers)["x-readratelimit-limit"].split(",")
     if log_api_usage:
-        logger.debug(
-            "Current API usage -- 15 minute:"
-            f" {fifteen_usage}/{fifteen_limit} -- daily:"
-            f" {daily_usage}/{daily_limit}"
-        )
+        try:
+            fifteen_usage, daily_usage = r.headers["X-RateLimit-Usage"].split(",")
+            fifteen_limit, daily_limit = r.headers["X-RateLimit-Limit"].split(",")
+        except (KeyError, ValueError):
+            logger.debug("Strava rate limit headers missing or malformed")
+        else:
+            logger.debug(
+                "Current API usage -- 15 minute:"
+                f" {fifteen_usage}/{fifteen_limit} -- daily:"
+                f" {daily_usage}/{daily_limit}"
+            )
     if r.status_code == 429:
         raise TooManyRequestsError("429 Too Many Requests")
     r.raise_for_status()

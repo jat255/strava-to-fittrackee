@@ -310,6 +310,14 @@ This will delete all 123 workouts in the configured FitTrackee instance!
 Are you sure you want to do this? [y]es or [n]o:
 ```
 
+## Acknowledgments
+
+Thanks to [Mikel Larreategi (@erral)](https://github.com/erral) and
+[Rimas Kudelis (@rimas-kudelis)](https://github.com/rimas-kudelis) for
+their contributions to diagnosing and fixing Strava API header handling in
+[#27](https://github.com/jat255/strava-to-fittrackee/pull/27) and
+[#28](https://github.com/jat255/strava-to-fittrackee/pull/28).
+
 ## Troubleshooting / Known Limitations
 
 - "Manual" activities are ignored:
