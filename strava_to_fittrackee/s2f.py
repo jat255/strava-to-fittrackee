@@ -262,7 +262,7 @@ class StravaConnector:
     def web_application_flow(self):
         logger.debug("Running Web Application Flow")
         redirect_uri = "https://localhost"
-        scope = ["activity:read_all"]
+        scope = ["read", "activity:read_all"]
         oauth = OAuth2Session(self.client_id, redirect_uri=redirect_uri, scope=scope)
         authorization_url, state = oauth.authorization_url(self.authorize_url)
         print(f"\nPlease go to {authorization_url} and authorize access.")
