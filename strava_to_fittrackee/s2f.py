@@ -365,41 +365,41 @@ class StravaConnector:
             logger.debug(
                 "Getting all Strava activities" f' {f"after {after}" if after else ""}'
             )
-            page = 1
-            all_activities = []
-            while True:
-                params = {"per_page": per_page, "page": page}
-                if after:
-                    params["after"] = after.timestamp()
-                r = self.make_api_request(
-                    "/athlete/activities", params=params
-                )
-                if len(r.json()) == 0:
-                    logger.debug(
-                        "No more activities found "
-                        f"(total activities: {len(all_activities)})"
-                    )
-                    return [self.get_detailed_activity(a) for a in all_activities]
-                else:
-                    all_activities.extend(r.json())
-                    logger.debug(
-                        f"Fetched page {page} of activities "
-                        f"(fetched {len(all_activities)} so far)"
-                    )
-                    page += 1
         else:
+            per_page = limit
             logger.debug(
                 f"Getting last {limit} activities"
                 f' {f"after {after}" if after else ""}'
             )
-            params = {"per_page": limit}
+        page = 1
+        all_activities = []
+        while True:
+            params = {"per_page": per_page, "page": page}
             if after:
                 params["after"] = after.timestamp()
             r = self.make_api_request(
                 "/athlete/activities", params=params
             )
-            activities = r.json()
-            return [self.get_detailed_activity(a) for a in activities]
+            if len(r.json()) == 0:
+                logger.debug(
+                    "No more activities found "
+                    f"(total activities: {len(all_activities)})"
+                )
+                break
+            elif limit:
+                logger.debug(
+                    f"Fetched {len(all_activities)} activities"
+                )
+                break
+            else:
+                all_activities.extend(r.json())
+                logger.debug(
+                    f"Fetched page {page} of activities "
+                    f"(fetched {len(all_activities)} so far)"
+                )
+            page += 1
+
+        return [self.get_detailed_activity(a) for a in all_activities]
 
     def get_gear(self, gear_id: str) -> Dict:
         """
