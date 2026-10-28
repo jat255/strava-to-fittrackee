@@ -183,10 +183,10 @@ def custom_raise_for_status(r: Response, log_api_usage: bool = True):
     """
     if log_api_usage:
         try:
-            fifteen_usage, daily_usage = r.headers["X-RateLimit-Usage"].split(",")
-            fifteen_limit, daily_limit = r.headers["X-RateLimit-Limit"].split(",")
+            fifteen_usage, daily_usage = r.headers["X-ReadRateLimit-Usage"].split(",")
+            fifteen_limit, daily_limit = r.headers["X-ReadRateLimit-Limit"].split(",")
         except (KeyError, ValueError):
-            logger.debug("Strava rate limit headers missing or malformed")
+            logger.debug("Strava read rate limit headers missing or malformed")
         else:
             logger.debug(
                 "Current API usage -- 15 minute:"
