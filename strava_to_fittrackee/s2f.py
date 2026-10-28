@@ -373,7 +373,7 @@ class StravaConnector:
                 if activity_count >= limit:
                     return
                 else:
-                    params["per_page"] = min(per_page, activity_count - limit)
+                    params["per_page"] = min(per_page, limit - activity_count)
             if after:
                 params["after"] = after.timestamp()
             r = self.make_api_request(
