@@ -361,20 +361,19 @@ class StravaConnector:
             How many activities to download per request to the API (larger values take
             longer but require fewer requests from the API)
         """
-        if limit is None:
-            logger.debug(
-                "Getting all Strava activities" f' {f"after {after}" if after else ""}'
-            )
-        else:
-            per_page = limit
-            logger.debug(
-                f"Getting last {limit} activities"
-                f' {f"after {after}" if after else ""}'
-            )
+        logger.debug(
+            f'{"Getting all Strava activities" if limit is None else f"Getting last {limit} activities"}'
+            f'{f" after {after}" if after else ""}'
+        )
         page = 1
-        all_activities = []
+        activity_count = 0
         while True:
             params = {"per_page": per_page, "page": page}
+            if limit:
+                if activity_count >= limit:
+                    return
+                else:
+                    params["per_page"] = min(per_page, activity_count - limit)
             if after:
                 params["after"] = after.timestamp()
             r = self.make_api_request(
@@ -383,23 +382,20 @@ class StravaConnector:
             if len(r.json()) == 0:
                 logger.debug(
                     "No more activities found "
-                    f"(total activities: {len(all_activities)})"
+                    f"(total activities: {activity_count})"
                 )
-                break
-            elif limit:
-                logger.debug(
-                    f"Fetched {len(all_activities)} activities"
-                )
-                break
+                return
             else:
-                all_activities.extend(r.json())
                 logger.debug(
-                    f"Fetched page {page} of activities "
-                    f"(fetched {len(all_activities)} so far)"
+                    f"Fetched page {page} of activities"
                 )
-            page += 1
-
-        return [self.get_detailed_activity(a) for a in all_activities]
+                for a in r.json():
+                    yield self.get_detailed_activity(a)
+                    activity_count += 1
+                    logger.debug(
+                        f"Fetched {activity_count} activities so far"
+                    )
+                page += 1
 
     def get_gear(self, gear_id: str) -> Dict:
         """
@@ -977,12 +973,10 @@ def download_all_strava_gpx(folder_name: str):
     already-downloaded activities will be skipped.
     """
     strava = StravaConnector()
-    activities = strava.get_activities(limit=None, per_page=200)
     i = 0
     output_folder = Path(folder_name)
     output_folder.mkdir(exist_ok=True)
-    while i < len(activities):
-        a = activities[i]
+    for a in strava.get_activities(limit=None, per_page=200):
         try:
             output_file = (
                 output_folder
@@ -1004,7 +998,7 @@ def download_all_strava_gpx(folder_name: str):
             else:
                 logger.debug(f"Output {output_file} already exists, skipping!")
             i += 1
-            logger.info(f"Processed {i} of {len(activities)} Activities")
+            logger.info(f"Processed {i} Activities")
         except TooManyRequestsError:
             logger.warning(
                 "Hit Strava API limit; sleeping until next 15 minute interval"
@@ -1071,61 +1065,54 @@ def sync_strava_with_fittrackee():
         latest_dt = datetime.fromtimestamp(0)
         logger.info(f"No FitTrackee workouts were found, so syncing all!")
 
-    # get strava activities after the latest fittrackee
-    activities = strava.get_activities(after=latest_dt, limit=None)
-    logger.info(
-        f"Found {len(activities)} Strava activities after " f"{(latest_dt).isoformat()}"
-    )
-    to_process = []  # list to hold activities that don't exist in fittrackee
-    for a in activities:
-        if not activity_has_matching_workout(strava, fittrackee, a):
-            logger.debug(
-                f'Marking Strava activitiy {a["id"]} at {a["start_date"]} as'
-                " needing to be processed"
-            )
-            to_process.append(a)
-        else:
+    # get and process Strava activities after the latest fittrackee workout
+    total = uploaded = skipped_duplicates = skipped_bad_type = 0
+    for a in strava.get_activities(after=latest_dt, limit=None, per_page=200):
+        logger.debug(
+            f'Processing Strava activitiy {a["id"]} at {a["start_date"]}'
+        )
+        total += 1
+
+        if activity_has_matching_workout(strava, fittrackee, a):
             # skip this activity since it already has a matching workout
             logger.debug(
-                f'Strava activity {a["id"]} at {a["start_date"]} has a match'
-                " in FitTrackee"
+                f'Strava activity {a["id"]} at {a["start_date"]}'
+                " has a match in FitTrackee, skipping!"
             )
-    if len(to_process) > 0:
-        i = 0
-        while i < len(to_process):
-            a = to_process[i]
-            # generate GPX and upload to FitTrackee
-            logger.debug(f'Processing Strava activity {a["id"]}')
-            act = strava.create_activity_from_strava(a, get_streams=True)
+            skipped_duplicates += 1
+            continue
 
-            # skip this activity if we don't know its sport type
-            if act.type not in fittrackee.sport_id_map:
-                logger.warning(
-                    f"Activity type {act.type} not recognized in FitTrackee, skipping!"
-                )
-                i += 1
-                continue
+        act = strava.create_activity_from_strava(a, get_streams=True)
+        # skip this activity if we don't know its sport type
+        if act.type not in fittrackee.sport_id_map:
+            logger.warning(
+                f'Strava activity {a["id"]} at {a["start_date"]}'
+                f" has an Activity type {act.type} not recognized in FitTrackee, skipping!"
+            )
+            skipped_bad_type += 1
+            continue
 
-            if act.lat == [None] and act.long == [None]:
-                # we don't have any GPS data, so do manual activity
-                fittrackee.upload_no_gpx(act)
-            else:
-                temp_file = tempdir.name + f'/{act.activity_dict["id"]}.gpx'
-                logger.debug(f"Writing Strava activity gpx to {temp_file}")
-                with open(temp_file, "w") as f:
-                    f.write(act.as_xml())
-                logger.info(
-                    f"Uploading workout {i+1} of {len(to_process)} to FitTrackee"
-                )
-                logger.debug(f"Uploading {temp_file} to FitTrackee")
-                fittrackee.upload_gpx(temp_file)
-            i += 1
-        logger.info(
-            f"Processed {len(to_process)} Strava activities to FitTrackee workouts"
-        )
-    else:
-        logger.info("Nothing to do!")
+        if act.lat == [None] and act.long == [None]:
+            # we don't have any GPS data, so do manual activity
+            fittrackee.upload_no_gpx(act)
+        else:
+            temp_file = tempdir.name + f'/{act.activity_dict["id"]}.gpx'
+            logger.debug(f"Writing Strava activity {a["id"]} gpx to {temp_file}")
+            with open(temp_file, "w") as f:
+                f.write(act.as_xml())
+            logger.info(
+                f"Uploading workout based on Strava activity {a["id"]} to FitTrackee"
+            )
+            logger.debug(f"Uploading {temp_file} to FitTrackee")
+            fittrackee.upload_gpx(temp_file)
+        uploaded += 1
 
+    logger.info(
+        f"Processed {total} Strava activities."
+        f" {uploaded} have been uploaded as FitTrackee workouts." if uploaded else ""
+        f" {skipped_duplicates} have been skipped as duplicates." if skipped_duplicates else ""
+        f" {skipped_bad_type} have been skipped due to unknown type." if skipped_bad_type else ""
+    )
 
 def ask_user_to_confirm():
     """
