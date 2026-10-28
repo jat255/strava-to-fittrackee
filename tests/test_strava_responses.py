@@ -16,9 +16,9 @@ class StravaResponseTests(unittest.TestCase):
 
     def test_header_names_are_case_insensitive(self):
         for usage, limit in [
-            ("x-ratelimit-usage", "x-ratelimit-limit"),
-            ("X-RateLimit-Usage", "X-RateLimit-Limit"),
-            ("X-Ratelimit-Usage", "X-Ratelimit-Limit"),
+            ("x-readratelimit-usage", "x-readratelimit-limit"),
+            ("X-ReadRateLimit-Usage", "X-ReadRateLimit-Limit"),
+            ("X-ReadRatelimit-Usage", "X-ReadRatelimit-Limit"),
         ]:
             with self.subTest(usage=usage):
                 response = self.response(200, {usage: "3,4", limit: "100,1000"})
@@ -36,7 +36,7 @@ class StravaResponseTests(unittest.TestCase):
             custom_raise_for_status(self.response(429, {}))
 
     def test_missing_or_malformed_headers_do_not_break_success(self):
-        for headers in ({}, {"X-RateLimit-Usage": "invalid", "X-RateLimit-Limit": "100,1000"}):
+        for headers in ({}, {"X-ReadRateLimit-Usage": "invalid", "X-ReadRateLimit-Limit": "100,1000"}):
             with self.subTest(headers=headers):
                 custom_raise_for_status(self.response(200, headers))
 
