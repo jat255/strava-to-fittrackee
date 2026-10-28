@@ -1077,11 +1077,11 @@ def sync_strava_with_fittrackee():
             fittrackee.upload_no_gpx(act)
         else:
             temp_file = tempdir.name + f'/{act.activity_dict["id"]}.gpx'
-            logger.debug(f"Writing Strava activity {a["id"]} gpx to {temp_file}")
+            logger.debug(f"Writing Strava activity {a['id']} gpx to {temp_file}")
             with open(temp_file, "w") as f:
                 f.write(act.as_xml())
             logger.info(
-                f"Uploading workout based on Strava activity {a["id"]} to FitTrackee"
+                f"Uploading workout based on Strava activity {a['id']} to FitTrackee"
             )
             logger.debug(f"Uploading {temp_file} to FitTrackee")
             fittrackee.upload_gpx(temp_file)
