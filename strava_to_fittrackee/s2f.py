@@ -366,14 +366,9 @@ class StravaConnector:
             f'{f" after {after}" if after else ""}'
         )
         page = 1
-        activity_count = 0
+        all_activities = []
         while True:
             params = {"per_page": per_page, "page": page}
-            if limit:
-                if activity_count >= limit:
-                    return
-                else:
-                    params["per_page"] = min(per_page, limit - activity_count)
             if after:
                 params["after"] = after.timestamp()
             r = self.make_api_request(
@@ -381,21 +376,32 @@ class StravaConnector:
             )
             if len(r.json()) == 0:
                 logger.debug(
-                    "No more activities found "
-                    f"(total activities: {activity_count})"
+                    "No more activity summaries found "
+                    f"(total activity summaries: {len(all_activities)})"
                 )
-                return
-            else:
-                logger.debug(
-                    f"Fetched page {page} of activities"
-                )
-                for a in r.json():
-                    yield self.get_detailed_activity(a)
-                    activity_count += 1
-                    logger.debug(
-                        f"Fetched {activity_count} activities so far"
-                    )
-                page += 1
+                break
+            all_activities.extend(r.json())
+            logger.debug(
+                f"Fetched page {page} of activity summaries "
+                f"(fetched {len(all_activities)} summaries so far)"
+            )
+            if limit and len(all_activities) >= limit:
+                break
+
+            page += 1
+
+        all_activities.sort(key = lambda activity: activity["start_date"])
+        if limit:
+            all_activities = all_activities[-limit:]
+        activity_count = 0
+        logger.debug("Proceeding to fetch activity details")
+        for a in all_activities:
+            activity = self.get_detailed_activity(a)
+            activity_count += 1
+            logger.debug(
+                f"Fetched activity {activity_count} of {limit}"
+            )
+            yield activity
 
     def get_gear(self, gear_id: str) -> Dict:
         """
