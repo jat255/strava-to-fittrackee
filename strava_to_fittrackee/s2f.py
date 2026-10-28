@@ -453,34 +453,15 @@ class StravaConnector:
             get_streams = False
 
         if get_streams:
-            logger.debug(f"Getting latitude and longitude for activity {activity_id}")
+            logger.debug(f"Getting streams for activity {activity_id}")
             r = self.make_api_request(
                 f"/activities/{activity_id}/streams",
-                params={"keys": ["latlng"]},
+                params={"keys": ["altitude,cadence,distance,grade_smooth,heartrate,latlng,moving,temp,time,velocity_smooth,watts"]},
             )
             latlng = self.filter_response_by_key(r.json(), 'latlng', [(None, None)])
             distance = self.filter_response_by_key(r.json(), 'distance', [0.0, activity['distance']])
-
-            logger.debug(f"Getting timepoints for activity {activity_id}")
-            r = self.make_api_request(
-                f"/activities/{activity_id}/streams",
-                params={"keys": ["time"]},
-            )
             time_list = self.filter_response_by_key(r.json(), 'time', [0.0, activity['moving_time']])
-
-            logger.debug(f"Getting altitude for activity {activity_id}")
-            r = self.make_api_request(
-                f"/activities/{activity_id}/streams",
-                params={"keys": ["altitude"]},
-            )
             altitude = self.filter_response_by_key(r.json(), 'altitude', [None])
-
-
-            logger.debug(f"Getting velocity for activity {activity_id}")
-            r = self.make_api_request(
-                f"/activities/{activity_id}/streams",
-                params={"keys": ["velocity_smooth"]},
-            )
             velocity = self.filter_response_by_key(r.json(), 'velocity_smooth', [None])
         else:
             latlng = [(None, None)]
