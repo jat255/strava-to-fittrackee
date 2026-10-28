@@ -977,34 +977,27 @@ def download_all_strava_gpx(folder_name: str):
     output_folder = Path(folder_name)
     output_folder.mkdir(exist_ok=True)
     for a in strava.get_activities(limit=None, per_page=200):
-        try:
-            output_file = (
-                output_folder
-                / f"{datetime.strptime(a['start_date'], '%Y-%m-%dT%H:%M:%SZ').strftime('%Y%m%d_%H%M%S')}_{a['id']}.gpx"
-            )
-            if not output_file.exists():
-                logger.debug(f"Writing activity gpx to {output_file}")
-                if a["manual"] is False:
-                    act = strava.create_activity_from_strava(a, get_streams=True)
-                    with open(output_file, "w") as f:
-                        f.write(act.as_xml())
-                else:
-                    logger.warning(
-                        f"Activity {a['id']} does not have GPS data, skipping!"
-                    )
-                    with open(str(output_file) + ".json", "w") as f:
-                        # print(f"Manual activity {a['id']}", file=f)
-                        print(json.dumps(a, indent=2), file=f)
+        output_file = (
+            output_folder
+            / f"{datetime.strptime(a['start_date'], '%Y-%m-%dT%H:%M:%SZ').strftime('%Y%m%d_%H%M%S')}_{a['id']}.gpx"
+        )
+        if not output_file.exists():
+            logger.debug(f"Writing activity gpx to {output_file}")
+            if a["manual"] is False:
+                act = strava.create_activity_from_strava(a, get_streams=True)
+                with open(output_file, "w") as f:
+                    f.write(act.as_xml())
             else:
-                logger.debug(f"Output {output_file} already exists, skipping!")
-            i += 1
-            logger.info(f"Processed {i} Activities")
-        except TooManyRequestsError:
-            logger.warning(
-                "Hit Strava API limit; sleeping until next 15 minute interval"
-            )
-            wait_until_fifteen()
-
+                logger.warning(
+                    f"Activity {a['id']} does not have GPS data, skipping!"
+                )
+                with open(str(output_file) + ".json", "w") as f:
+                    # print(f"Manual activity {a['id']}", file=f)
+                    print(json.dumps(a, indent=2), file=f)
+        else:
+            logger.debug(f"Output {output_file} already exists, skipping!")
+        i += 1
+        logger.info(f"Processed {i} Activities")
 
 def upload_all_fittrackee(folder_name: str):
     """
