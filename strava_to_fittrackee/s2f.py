@@ -183,10 +183,10 @@ def custom_raise_for_status(r: Response, log_api_usage: bool = True):
     """
     if log_api_usage:
         try:
-            fifteen_usage, daily_usage = r.headers["X-RateLimit-Usage"].split(",")
-            fifteen_limit, daily_limit = r.headers["X-RateLimit-Limit"].split(",")
+            fifteen_usage, daily_usage = r.headers["X-ReadRateLimit-Usage"].split(",")
+            fifteen_limit, daily_limit = r.headers["X-ReadRateLimit-Limit"].split(",")
         except (KeyError, ValueError):
-            logger.debug("Strava rate limit headers missing or malformed")
+            logger.debug("Strava read rate limit headers missing or malformed")
         else:
             logger.debug(
                 "Current API usage -- 15 minute:"
@@ -333,22 +333,12 @@ class StravaConnector:
             A dictionary representation of a SummaryActivity from the Strava
             API (https://developers.strava.com/docs/reference/#api-models-SummaryActivity)
         """
-        success = False
-        while not success:
-            try:
-                logger.debug(
-                    f"Getting activity details for activity {activity_dict['id']}"
-                )
-                r = self.client.get(
-                    self.base_url + f"/activities/{activity_dict['id']}"
-                )
-                custom_raise_for_status(r)
-                success = True
-            except TooManyRequestsError:
-                logger.warning(
-                    "Hit Strava API limit; sleeping until next 15 minute interval"
-                )
-                wait_until_fifteen()
+        logger.debug(
+            f"Getting activity details for activity {activity_dict['id']}"
+        )
+        r = self.make_api_request(
+            f"/activities/{activity_dict['id']}"
+        )
         return r.json()
 
     def get_activities(
@@ -368,68 +358,50 @@ class StravaConnector:
         after:
             If provided, only return activities after this point in time
         per_page:
-            How many activiries to download per request to the API (larger values take
+            How many activities to download per request to the API (larger values take
             longer but require fewer requests from the API)
         """
-        if limit is None:
-            logger.debug(
-                "Getting all Strava activities" f' {f"after {after}" if after else ""}'
-            )
-            page = 1
-            all_activities = []
-            while True:
-                params = {"per_page": per_page, "page": page}
-                if after:
-                    params["after"] = after.timestamp()
-                success = False
-                while not success:
-                    try:
-                        r = self.client.get(
-                            self.base_url + "/athlete/activities", params=params
-                        )
-                        custom_raise_for_status(r)
-                        success = True
-                    except TooManyRequestsError:
-                        logger.warning(
-                            "Hit Strava API limit; sleeping until next 15 minute interval"
-                        )
-                        wait_until_fifteen()
-                if len(r.json()) == 0:
-                    logger.debug(
-                        "No more activities found "
-                        f"(total activities: {len(all_activities)})"
-                    )
-                    return [self.get_detailed_activity(a) for a in all_activities]
-                else:
-                    all_activities.extend(r.json())
-                    logger.debug(
-                        f"Fetched page {page} of activities "
-                        f"(fetched {len(all_activities)} so far)"
-                    )
-                    page += 1
-        else:
-            logger.debug(
-                f"Getting last {limit} activities"
-                f' {f"after {after}" if after else ""}'
-            )
-            params = {"per_page": limit}
+        logger.debug(
+            f'{"Getting all Strava activities" if limit is None else f"Getting last {limit} activities"}'
+            f'{f" after {after}" if after else ""}'
+        )
+        page = 1
+        all_activities = []
+        while True:
+            params = {"per_page": per_page, "page": page}
             if after:
                 params["after"] = after.timestamp()
-            success = False
-            while not success:
-                try:
-                    r = self.client.get(
-                        self.base_url + "/athlete/activities", params=params
-                    )
-                    custom_raise_for_status(r)
-                    success = True
-                except TooManyRequestsError:
-                    logger.warning(
-                        "Hit Strava API limit; sleeping until next 15 minute interval"
-                    )
-                    wait_until_fifteen()
-            activities = r.json()
-            return [self.get_detailed_activity(a) for a in activities]
+            r = self.make_api_request(
+                "/athlete/activities", params=params
+            )
+            if len(r.json()) == 0:
+                logger.debug(
+                    "No more activity summaries found "
+                    f"(total activity summaries: {len(all_activities)})"
+                )
+                break
+            all_activities.extend(r.json())
+            logger.debug(
+                f"Fetched page {page} of activity summaries "
+                f"(fetched {len(all_activities)} summaries so far)"
+            )
+            if limit and len(all_activities) >= limit:
+                break
+
+            page += 1
+
+        all_activities.sort(key = lambda activity: activity["start_date"])
+        if limit:
+            all_activities = all_activities[-limit:]
+        activity_count = 0
+        logger.debug("Proceeding to fetch activity details")
+        for a in all_activities:
+            activity = self.get_detailed_activity(a)
+            activity_count += 1
+            logger.debug(
+                f"Fetched activity {activity_count} of {limit}"
+            )
+            yield activity
 
     def get_gear(self, gear_id: str) -> Dict:
         """
@@ -451,10 +423,9 @@ class StravaConnector:
         """
         if gear_id in self.gear:
             return self.gear[gear_id]
-        r = self.client.get(
-            self.base_url + f"/gear/{gear_id}"
+        r = self.make_api_request(
+            f"/gear/{gear_id}"
         )
-        custom_raise_for_status(r)
         self.gear[gear_id] = r.json()
 
         return self.gear[gear_id]
@@ -483,37 +454,33 @@ class StravaConnector:
 
         if get_streams:
             logger.debug(f"Getting latitude and longitude for activity {activity_id}")
-            r = self.client.get(
-                self.base_url + f"/activities/{activity_id}/streams",
+            r = self.make_api_request(
+                f"/activities/{activity_id}/streams",
                 params={"keys": ["latlng"]},
             )
-            custom_raise_for_status(r)
             latlng = self.filter_response_by_key(r.json(), 'latlng', [(None, None)])
             distance = self.filter_response_by_key(r.json(), 'distance', [0.0, activity['distance']])
 
             logger.debug(f"Getting timepoints for activity {activity_id}")
-            r = self.client.get(
-                self.base_url + f"/activities/{activity_id}/streams",
+            r = self.make_api_request(
+                f"/activities/{activity_id}/streams",
                 params={"keys": ["time"]},
             )
-            custom_raise_for_status(r)
             time_list = self.filter_response_by_key(r.json(), 'time', [0.0, activity['moving_time']])
 
             logger.debug(f"Getting altitude for activity {activity_id}")
-            r = self.client.get(
-                self.base_url + f"/activities/{activity_id}/streams",
+            r = self.make_api_request(
+                f"/activities/{activity_id}/streams",
                 params={"keys": ["altitude"]},
             )
-            custom_raise_for_status(r)
             altitude = self.filter_response_by_key(r.json(), 'altitude', [None])
 
 
             logger.debug(f"Getting velocity for activity {activity_id}")
-            r = self.client.get(
-                self.base_url + f"/activities/{activity_id}/streams",
+            r = self.make_api_request(
+                f"/activities/{activity_id}/streams",
                 params={"keys": ["velocity_smooth"]},
             )
-            custom_raise_for_status(r)
             velocity = self.filter_response_by_key(r.json(), 'velocity_smooth', [None])
         else:
             latlng = [(None, None)]
@@ -539,6 +506,17 @@ class StravaConnector:
             description=description
         )
 
+    def make_api_request(self, path: str, **kwargs):
+        while True:
+            try:
+                r = self.client.get(self.base_url + path, **kwargs)
+                custom_raise_for_status(r)
+                return r
+            except TooManyRequestsError:
+                logger.warning(
+                    "Hit Strava API limit; sleeping until next 15 minute interval"
+                )
+                wait_until_fifteen()
 
 class Activity:
     def __init__(
@@ -1001,40 +979,31 @@ def download_all_strava_gpx(folder_name: str):
     already-downloaded activities will be skipped.
     """
     strava = StravaConnector()
-    activities = strava.get_activities(limit=None, per_page=200)
     i = 0
     output_folder = Path(folder_name)
     output_folder.mkdir(exist_ok=True)
-    while i < len(activities):
-        a = activities[i]
-        try:
-            output_file = (
-                output_folder
-                / f"{datetime.strptime(a['start_date'], '%Y-%m-%dT%H:%M:%SZ').strftime('%Y%m%d_%H%M%S')}_{a['id']}.gpx"
-            )
-            if not output_file.exists():
-                logger.debug(f"Writing activity gpx to {output_file}")
-                if a["manual"] is False:
-                    act = strava.create_activity_from_strava(a, get_streams=True)
-                    with open(output_file, "w") as f:
-                        f.write(act.as_xml())
-                else:
-                    logger.warning(
-                        f"Activity {a['id']} does not have GPS data, skipping!"
-                    )
-                    with open(str(output_file) + ".json", "w") as f:
-                        # print(f"Manual activity {a['id']}", file=f)
-                        print(json.dumps(a, indent=2), file=f)
+    for a in strava.get_activities(limit=None, per_page=200):
+        output_file = (
+            output_folder
+            / f"{datetime.strptime(a['start_date'], '%Y-%m-%dT%H:%M:%SZ').strftime('%Y%m%d_%H%M%S')}_{a['id']}.gpx"
+        )
+        if not output_file.exists():
+            logger.debug(f"Writing activity gpx to {output_file}")
+            if a["manual"] is False:
+                act = strava.create_activity_from_strava(a, get_streams=True)
+                with open(output_file, "w") as f:
+                    f.write(act.as_xml())
             else:
-                logger.debug(f"Output {output_file} already exists, skipping!")
-            i += 1
-            logger.info(f"Processed {i} of {len(activities)} Activities")
-        except TooManyRequestsError:
-            logger.warning(
-                "Hit Strava API limit; sleeping until next 15 minute interval"
-            )
-            wait_until_fifteen()
-
+                logger.warning(
+                    f"Activity {a['id']} does not have GPS data, skipping!"
+                )
+                with open(str(output_file) + ".json", "w") as f:
+                    # print(f"Manual activity {a['id']}", file=f)
+                    print(json.dumps(a, indent=2), file=f)
+        else:
+            logger.debug(f"Output {output_file} already exists, skipping!")
+        i += 1
+        logger.info(f"Processed {i} Activities")
 
 def upload_all_fittrackee(folder_name: str):
     """
@@ -1095,67 +1064,54 @@ def sync_strava_with_fittrackee():
         latest_dt = datetime.fromtimestamp(0)
         logger.info(f"No FitTrackee workouts were found, so syncing all!")
 
-    # get strava activities after the latest fittrackee
-    activities = strava.get_activities(after=latest_dt, limit=None)
-    logger.info(
-        f"Found {len(activities)} Strava activities after " f"{(latest_dt).isoformat()}"
-    )
-    to_process = []  # list to hold activities that don't exist in fittrackee
-    for a in activities:
-        if not activity_has_matching_workout(strava, fittrackee, a):
-            logger.debug(
-                f'Marking Strava activitiy {a["id"]} at {a["start_date"]} as'
-                " needing to be processed"
-            )
-            to_process.append(a)
-        else:
+    # get and process Strava activities after the latest fittrackee workout
+    total = uploaded = skipped_duplicates = skipped_bad_type = 0
+    for a in strava.get_activities(after=latest_dt, limit=None, per_page=200):
+        logger.debug(
+            f'Processing Strava activitiy {a["id"]} at {a["start_date"]}'
+        )
+        total += 1
+
+        if activity_has_matching_workout(strava, fittrackee, a):
             # skip this activity since it already has a matching workout
             logger.debug(
-                f'Strava activity {a["id"]} at {a["start_date"]} has a match'
-                " in FitTrackee"
+                f'Strava activity {a["id"]} at {a["start_date"]}'
+                " has a match in FitTrackee, skipping!"
             )
-    if len(to_process) > 0:
-        i = 0
-        while i < len(to_process):
-            try:
-                a = to_process[i]
-                # generate GPX and upload to FitTrackee
-                logger.debug(f'Processing Strava activity {a["id"]}')
-                act = strava.create_activity_from_strava(a, get_streams=True)
-                
-                # skip this activity if we don't know its sport type
-                if act.type not in fittrackee.sport_id_map:
-                    logger.warning(
-                        f"Activity type {act.type} not recognized in FitTrackee, skipping!"
-                    )
-                    i += 1
-                    continue
-                
-                if act.lat == [None] and act.long == [None]:
-                    # we don't have any GPS data, so do manual activity
-                    fittrackee.upload_no_gpx(act)
-                else:
-                    temp_file = tempdir.name + f'/{act.activity_dict["id"]}.gpx'
-                    logger.debug(f"Writing Strava activity gpx to {temp_file}")
-                    with open(temp_file, "w") as f:
-                        f.write(act.as_xml())
-                    logger.info(
-                        f"Uploading workout {i+1} of {len(to_process)} to FitTrackee"
-                    )
-                    logger.debug(f"Uploading {temp_file} to FitTrackee")
-                    fittrackee.upload_gpx(temp_file)
-                i += 1
-            except TooManyRequestsError:
-                logger.warning(
-                    "Hit Strava API limit; sleeping until next 15 minute interval"
-                )
-                wait_until_fifteen()
-        logger.info(
-            f"Processed {len(to_process)} Strava activities to FitTrackee workouts"
-        )
-    else:
-        logger.info("Nothing to do!")
+            skipped_duplicates += 1
+            continue
 
+        act = strava.create_activity_from_strava(a, get_streams=True)
+        # skip this activity if we don't know its sport type
+        if act.type not in fittrackee.sport_id_map:
+            logger.warning(
+                f'Strava activity {a["id"]} at {a["start_date"]}'
+                f" has an Activity type {act.type} not recognized in FitTrackee, skipping!"
+            )
+            skipped_bad_type += 1
+            continue
+
+        if act.lat == [None] and act.long == [None]:
+            # we don't have any GPS data, so do manual activity
+            fittrackee.upload_no_gpx(act)
+        else:
+            temp_file = tempdir.name + f'/{act.activity_dict["id"]}.gpx'
+            logger.debug(f"Writing Strava activity {a["id"]} gpx to {temp_file}")
+            with open(temp_file, "w") as f:
+                f.write(act.as_xml())
+            logger.info(
+                f"Uploading workout based on Strava activity {a["id"]} to FitTrackee"
+            )
+            logger.debug(f"Uploading {temp_file} to FitTrackee")
+            fittrackee.upload_gpx(temp_file)
+        uploaded += 1
+
+    logger.info(
+        f"Processed {total} Strava activities."
+        f" {uploaded} have been uploaded as FitTrackee workouts." if uploaded else ""
+        f" {skipped_duplicates} have been skipped as duplicates." if skipped_duplicates else ""
+        f" {skipped_bad_type} have been skipped due to unknown type." if skipped_bad_type else ""
+    )
 
 def ask_user_to_confirm():
     """
