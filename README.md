@@ -198,13 +198,10 @@ If you run this command without any workouts in FitTrackee, it will attempt to
 sync all activities, which will take quite a while if you have many activities. 
 Depending on the number of activities present, this will likely cause the code 
 to go over the Strava API rate limits (currently 100 requests per 15 minutes 
-and 1000 requests per day), since each activity requires 4 requests to get the 
-location data required to build a GPX file. So, if you have more than about 
-200-250 activities or so, this process will take multiple days -- blame Strava's 
-rate limits!
+and 1000 requests per day).
 
-To workaround this, the script will automatically back-off while running and 
-sleep until the next 15 minute interval. There is no functionality to deal 
+To work around this, the script will automatically back-off while running and
+sleep until the next 15-minute interval. There is no functionality to deal
 with the 1000 request limit, so if that gets hit, it will just continue trying 
 every fifteen minutes (although it should start working on the next day if you 
 let it continue running). Alternatively, you can kill the program and restart 
