@@ -32,6 +32,7 @@ from requests import Response
 from requests.exceptions import HTTPError
 from requests_oauthlib import OAuth2Session
 from tqdm import tqdm
+from xml.etree.ElementTree import Element
 
 logger = logging.getLogger("s2f")
 logging.basicConfig()
@@ -390,7 +391,7 @@ class StravaConnector:
 
             page += 1
 
-        all_activities.sort(key = lambda activity: activity["start_date"])
+        all_activities.sort(key = lambda activity: activity.get("start_date"))
         if limit:
             all_activities = all_activities[-limit:]
         activity_count = 0
@@ -445,44 +446,78 @@ class StravaConnector:
         
 
     def create_activity_from_strava(self, activity: dict, get_streams: bool = True):
-        activity_id = activity["id"]
-        if activity["manual"] and get_streams:
+        activity_id = activity.get("id")
+        if activity.get("manual") and get_streams:
             logger.warning(
                 f"Strava activity {activity_id} had no GPS data; cannot download GPX!"
             )
             get_streams = False
 
-        if get_streams:
+        if not get_streams:
+            streams = None
+            latlng = [activity.get("start_latlng"), activity.get("end_latlng")]
+            distance = [0.0, activity.get("distance")]
+            time_list = [0, activity.get("moving_time")]
+            altitude = [None, None]
+            velocity = [None, None]
+            cadence = [None, None]
+            heart_rate = [None, None]
+            power = [None, None]
+        else:
             logger.debug(f"Getting streams for activity {activity_id}")
-            r = self.make_api_request(
+            streams = self.make_api_request(
                 f"/activities/{activity_id}/streams",
                 params={"keys": ["altitude,cadence,distance,grade_smooth,heartrate,latlng,moving,temp,time,velocity_smooth,watts"]},
-            )
-            latlng = self.filter_response_by_key(r.json(), 'latlng', [(None, None)])
-            distance = self.filter_response_by_key(r.json(), 'distance', [0.0, activity['distance']])
-            time_list = self.filter_response_by_key(r.json(), 'time', [0.0, activity['moving_time']])
-            altitude = self.filter_response_by_key(r.json(), 'altitude', [None])
-            velocity = self.filter_response_by_key(r.json(), 'velocity_smooth', [None])
-        else:
-            latlng = [(None, None)]
-            distance = [0.0, activity['distance']]
-            time_list = [0, activity['moving_time']]
-            altitude = [None]
-            velocity = [None]
+            ).json()
+            time_list = self.filter_response_by_key(streams, "time", [0.0, activity.get("moving_time")])
+            latlng = self.filter_response_by_key(streams, "latlng", [activity.get("start_latlng"), activity.get("end_latlng")])
+            distance = self.filter_response_by_key(streams, "distance", [0.0, activity.get("distance")])
+            altitude = self.filter_response_by_key(streams, "altitude", [None, None])
+            velocity = self.filter_response_by_key(streams, "velocity_smooth", [None, None])
+            cadence = self.filter_response_by_key(streams, "cadence", [None, None])
+            heart_rate = self.filter_response_by_key(streams, "heartrate", [None, None])
+            power = self.filter_response_by_key(streams, "watts", [None, None])
+            # streams currently ignored: grade_smooth, moving, temp
+            timestamp_count = len(time_list)
+            dummy_list = [None] * timestamp_count
+            if timestamp_count != len(latlng):
+                match timestamp_count:
+                    case 1:
+                        latlng = latlng[:1] if len(latlng) > 1 else [activity.get("start_latlng") or [None, None]]
+                    case 2:
+                        latlng = [activity.get("start_latlng") or [None, None], activity.get("end_latlng") or [None, None]]
+                    case _:
+                        latlng = [[None, None]] * timestamp_count
+            if timestamp_count != len(distance):
+                distance = [0.0, activity.get("distance")] if timestamp_count == 2 else dummy_list
+            if timestamp_count != len(altitude):
+                altitude = dummy_list
+            if timestamp_count != len(velocity):
+                velocity = dummy_list
+            if timestamp_count != len(cadence):
+                cadence = dummy_list
+            if timestamp_count != len(heart_rate):
+                heart_rate = dummy_list
+            if timestamp_count != len(power):
+                power = dummy_list
 
         # process gear (will be None if no gear defined on activity)
-        gear = self.get_gear(activity["gear_id"]) if activity["gear_id"] else None
+        gear = self.get_gear(activity.get("gear_id")) if activity.get("gear_id") else None
 
-        description = activity["description"]
+        description = activity.get("description")
         description = "" if description is None else description
-        
+
         return Activity(
             activity_dict=activity,
+            streams_raw=streams,
             latlng=latlng,
             time_list=time_list,
             altitude=altitude,
             velocity=velocity,
             distance=distance,
+            cadence=cadence,
+            heart_rate=heart_rate,
+            power=power,
             gear=gear,
             description=description
         )
@@ -503,16 +538,21 @@ class Activity:
     def __init__(
         self,
         activity_dict,
+        streams_raw,
         latlng,
         time_list,
         altitude,
         velocity,
         distance,
+        cadence,
+        heart_rate,
+        power,
         gear,
         description,
     ):
         self.title = activity_dict["name"]
         self.activity_dict = activity_dict
+        self.streams_raw = streams_raw
         self.start_time = datetime.strptime(
             activity_dict["start_date"], "%Y-%m-%dT%H:%M:%SZ"
         )
@@ -522,6 +562,9 @@ class Activity:
         self.altitude = altitude
         self.velocity = velocity
         self.distance = distance
+        self.cadence = cadence
+        self.heart_rate = heart_rate
+        self.power = power
         self.type = activity_dict["type"]
         self.link = f"https://strava.com/activities/{activity_dict['id']}"
         self.gear = gear
@@ -532,6 +575,7 @@ class Activity:
         return {
             'title': self.title,
             'activity_dict': self.activity_dict,
+            'streams_raw': self.streams_raw,
             'start_time': self.start_time.isoformat(),
             'lat': self.lat,
             'long': self.long,
@@ -539,6 +583,9 @@ class Activity:
             'altitude': self.altitude,
             'velocity': self.velocity,
             'distance': self.distance,
+            'cadence': self.cadence,
+            'heart_rate': self.heart_rate,
+            'power': self.power,
             'type': self.type,
             'link': self.link,
             'gear': self.gear,
@@ -553,6 +600,9 @@ class Activity:
         Taken partially from https://stackoverflow.com/a/70665366
         """
         gpx = gpxpy.gpx.GPX()
+        garmin_extension = '{gpxtpx}'
+        nsmap = {garmin_extension[1:-1]: 'http://www.garmin.com/xmlschemas/TrackPointExtension/v1'}
+        gpx.nsmap = nsmap
 
         # Create first track in our GPX:
         gpx_track = gpxpy.gpx.GPXTrack(
@@ -568,13 +618,26 @@ class Activity:
         gpx_track.segments.append(gpx_segment)
 
         # Create points:
-        for time, lat, long, alt, vel in zip(
-            self.time, self.lat, self.long, self.altitude, self.velocity
+        for time, lat, long, altitude, velocity, cadence, heart_rate, power in zip(
+            self.time, self.lat, self.long, self.altitude, self.velocity, self.cadence, self.heart_rate, self.power
         ):
-            gpx_segment.points.append(
-                gpxpy.gpx.GPXTrackPoint(lat, long, elevation=alt, time=time, speed=vel)
-            )
-
+            trackpoint = gpxpy.gpx.GPXTrackPoint(lat, long, elevation=altitude, time=time, speed=velocity)
+            gpx_segment.points.append(trackpoint)
+            if power:
+                pow = Element('power')
+                trackpoint.extensions.append(pow)
+                pow.text = str(power)
+            if cadence or heart_rate:
+                garmin_root = Element(f'{garmin_extension}TrackPointExtension')
+                trackpoint.extensions.append(garmin_root)
+                if cadence:
+                    cad = Element(f'{garmin_extension}cad')
+                    cad.text = str(cadence)
+                    garmin_root.append(cad)
+                if heart_rate:
+                    hr = Element(f'{garmin_extension}hr')
+                    hr.text = str(heart_rate)
+                    garmin_root.append(hr)
         return gpx
 
     def as_xml(self):
@@ -918,7 +981,7 @@ def activity_has_matching_workout(
     ``activity`` should be a single activity dictionary as returned by the
     ``StravaConnector.get_activities()`` method
     """
-    activity_dt = datetime.strptime(activity["start_date"], "%Y-%m-%dT%H:%M:%SZ")
+    activity_dt = datetime.strptime(activity.get("start_date"), "%Y-%m-%dT%H:%M:%SZ")
     activity_dt = fittrackee.localize_utc_datetime(activity_dt)
     activity_date_str = activity_dt.strftime("%Y-%m-%d")
 
